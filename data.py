@@ -106,3 +106,43 @@ def load_crsp(reload: bool = False) -> pd.DataFrame:
         return df
 
     return _load_or_reload("crsp", _raw, fmt="parquet", reload=reload)
+
+
+# ── JKP characteristics ──────────────────────────────────────────────────────
+
+def load_jkp(country_set: str = "us", reload: bool = False) -> pd.DataFrame:
+    """
+    Load JKP stock-level characteristics (153 published factors).
+
+    Parameters
+    ----------
+    country_set : str
+        Which country set to load ('us', 'developed', 'all', ...).
+        Must match the suffix used by wrds_import.py.
+    reload : bool
+        If True, rebuild the cache from the raw parquet.
+
+    Raw source: RAW_DATA/jkp_characteristics_{country_set}.parquet
+                (created by wrds_import.py)
+    Cache:      PROCESSED_DATA/jkp_{country_set}.parquet
+
+    Key columns:
+        id, eom, excntry, gvkey, permno, size_grp, me,
+        ret_exc_lead1m  (1-month-ahead excess return),
+        + 153 characteristic columns
+    """
+    cache_name = f"jkp_{country_set}"
+
+    def _raw():
+        raw_file = PATH["RAW_DATA"] / f"jkp_characteristics_{country_set}.parquet"
+        if not raw_file.exists():
+            raise FileNotFoundError(
+                f"Raw JKP file not found at {raw_file}.\n"
+                f"Run:  .venv/bin/python wrds_import.py jkp"
+            )
+        df = pd.read_parquet(raw_file)
+        df["eom"] = pd.to_datetime(df["eom"])
+        df = df.sort_values(["permno", "eom"]).reset_index(drop=True)
+        return df
+
+    return _load_or_reload(cache_name, _raw, fmt="parquet", reload=reload)

@@ -94,13 +94,119 @@ def download_crsp_monthly() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  JKP CHARACTERISTICS  (Jensen, Kelly & Pedersen)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Countries to download.  Add more lists here to extend coverage.
+JKP_COUNTRY_SETS = {
+    "us": ["USA"],
+    # "developed": None,   # None → auto-detect from JKP country_classification.xlsx
+    # "all": None,         # could pull everything
+}
+
+# URL for the 153-characteristic list (abr_jkp column)
+_JKP_FACTOR_DETAILS_URL = (
+    "https://github.com/bkelly-lab/jkp-data/raw/master/data/factor_details.xlsx"
+)
+# URL for country classification (if we ever need developed / emerging)
+_JKP_COUNTRY_CLASS_URL = (
+    "https://github.com/bkelly-lab/jkp-data/raw/master/data/country_classification.xlsx"
+)
+
+
+def _get_jkp_char_names() -> list[str]:
+    """Fetch the 153 JKP characteristic abbreviations from GitHub."""
+    chars = pd.read_excel(_JKP_FACTOR_DETAILS_URL)
+    return chars.loc[chars["abr_jkp"].notna(), "abr_jkp"].tolist()
+
+
+def _resolve_jkp_countries(country_set: str) -> list[str]:
+    """
+    Return a list of excntry codes for the requested set.
+
+    Parameters
+    ----------
+    country_set : str
+        Key into JKP_COUNTRY_SETS.  If the value is a list, use it directly.
+        If None, download the classification file and pick 'developed'.
+    """
+    preset = JKP_COUNTRY_SETS.get(country_set)
+    if preset is not None:
+        return preset
+
+    # fall back to the JKP country classification
+    countries = pd.read_excel(_JKP_COUNTRY_CLASS_URL)
+    if country_set == "developed":
+        return countries.loc[
+            countries["msci_development"] == "developed", "excntry"
+        ].tolist()
+    else:
+        # "all" or anything else → return every country
+        return countries["excntry"].tolist()
+
+
+def download_jkp_characteristics(country_set: str = "us") -> None:
+    """
+    Download JKP stock-level characteristics from WRDS (contrib.global_factor).
+
+    Downloads the 153 published characteristics plus identifiers and the
+    1-month-ahead excess return.
+
+    Parameters
+    ----------
+    country_set : str
+        Which countries to pull.  Default 'us'.
+        Add entries to JKP_COUNTRY_SETS to extend.
+    """
+    print(f"[wrds_import] Downloading JKP characteristics ({country_set}) ...")
+
+    # resolve characteristic columns
+    char_names = _get_jkp_char_names()
+    print(f"[wrds_import]   {len(char_names)} characteristics")
+
+    # resolve countries
+    excntry_list = _resolve_jkp_countries(country_set)
+    country_sql = ", ".join(f"'{c}'" for c in excntry_list)
+    print(f"[wrds_import]   Countries: {excntry_list}")
+
+    # build query
+    id_cols = "id, eom, excntry, gvkey, permno, size_grp, me, ret_exc_lead1m"
+    char_cols = ", ".join(char_names)
+
+    query = f"""
+        SELECT {id_cols}, {char_cols}
+        FROM contrib.global_factor
+        WHERE common = 1
+          AND exch_main = 1
+          AND primary_sec = 1
+          AND obs_main = 1
+          AND excntry IN ({country_sql})
+    """
+
+    db = get_connection()
+    df = db.raw_sql(query, date_cols=["eom"])
+    db.close()
+
+    df = df.sort_values(["permno", "eom"]).reset_index(drop=True)
+
+    # save with country set in filename so US / developed / all don't collide
+    out = PATH["RAW_DATA"] / f"jkp_characteristics_{country_set}.parquet"
+    PATH["RAW_DATA"].mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out, index=False)
+    print(f"[wrds_import] JKP ({country_set}): {len(df):,} rows, "
+          f"{len(df.columns)} cols → {out}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  REGISTRY – add new download functions here
 # ══════════════════════════════════════════════════════════════════════════════
 
 DOWNLOADS = {
     "crsp": ("CRSP monthly stock file (shrcd 10/11)", download_crsp_monthly),
-    # "compustat": ("Compustat annual fundamentals", download_compustat),
-    # "ff":        ("Fama-French factors", download_ff_factors),
+    "jkp":  ("JKP 153 characteristics (US)", lambda: download_jkp_characteristics("us")),
+    # "jkp_developed": ("JKP 153 characteristics (developed)", lambda: download_jkp_characteristics("developed")),
+    # "compustat":     ("Compustat annual fundamentals", download_compustat),
+    # "ff":            ("Fama-French factors", download_ff_factors),
 }
 
 
