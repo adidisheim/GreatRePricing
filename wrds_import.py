@@ -106,11 +106,11 @@ JKP_COUNTRY_SETS = {
 
 # URL for the 153-characteristic list (abr_jkp column)
 _JKP_FACTOR_DETAILS_URL = (
-    "https://github.com/bkelly-lab/jkp-data/raw/master/data/factor_details.xlsx"
+    "https://github.com/bkelly-lab/jkp-data/raw/main/data/factor_details.xlsx"
 )
 # URL for country classification (if we ever need developed / emerging)
 _JKP_COUNTRY_CLASS_URL = (
-    "https://github.com/bkelly-lab/jkp-data/raw/master/data/country_classification.xlsx"
+    "https://github.com/bkelly-lab/jkp-data/raw/main/data/country_classification.xlsx"
 )
 
 
