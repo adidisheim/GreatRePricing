@@ -146,3 +146,40 @@ def load_jkp(country_set: str = "us", reload: bool = False) -> pd.DataFrame:
         return df
 
     return _load_or_reload(cache_name, _raw, fmt="parquet", reload=reload)
+
+
+# ── JKP factor returns ───────────────────────────────────────────────────────
+
+def load_jkp_factor_returns(reload: bool = False) -> pd.DataFrame:
+    """
+    Load JKP long-short factor returns (all countries, all factors, VW, monthly).
+
+    Downloaded from jkpfactors.com.
+
+    Raw source: RAW_DATA/jkp_factor_returns_all_vw.csv
+    Cache:      PROCESSED_DATA/jkp_factor_returns.parquet
+
+    Columns:
+        location   – country code (e.g. 'usa', 'deu', ...)
+        name       – factor abbreviation (153 factors)
+        freq       – 'monthly'
+        weighting  – 'vw'
+        direction  – sign convention (1 or -1)
+        n_stocks   – number of stocks in the portfolio
+        n_stocks_min – minimum stocks in any leg
+        date       – end-of-month date
+        ret        – long-short portfolio return
+    """
+    def _raw():
+        raw_file = PATH["RAW_DATA"] / "jkp_factor_returns_all_vw.csv"
+        if not raw_file.exists():
+            raise FileNotFoundError(
+                f"Raw JKP factor returns not found at {raw_file}.\n"
+                "Download from https://jkpfactors.com/ and place in RAW_DATA."
+            )
+        df = pd.read_csv(raw_file)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values(["location", "name", "date"]).reset_index(drop=True)
+        return df
+
+    return _load_or_reload("jkp_factor_returns", _raw, fmt="parquet", reload=reload)
