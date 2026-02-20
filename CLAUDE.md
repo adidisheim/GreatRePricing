@@ -86,7 +86,32 @@ save_table(df, "summary_stats")       # saves .tex to final_results/tables/ AND 
 - Add new modules as needed (e.g., `cleaning.py`, `plotting.py`).
 - Keep functions focused and well-documented with docstrings.
 
-## 5. Coding conventions
+## 5. Python environment
+
+- The project uses a **local venv** at `.venv/` (git-ignored).
+- **All Python commands must run through the venv.** Use:
+  ```
+  .venv/bin/python  (instead of python3)
+  .venv/bin/pip     (instead of pip)
+  ```
+- Dependencies are tracked in `requirements.txt`.
+- To set up from scratch: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`
+
+### Dependency sync protocol (for Claude instances)
+
+**At the start of every session**, check that the local venv is in sync:
+```bash
+.venv/bin/pip install -r requirements.txt --quiet
+```
+This is fast and idempotent — it does nothing if already up to date.
+
+**When you install a new package:**
+1. Install it: `.venv/bin/pip install <package>`
+2. Freeze immediately: `.venv/bin/pip freeze > requirements.txt`
+3. Commit `requirements.txt` together with the code that uses the new package.
+4. Never commit code that imports a package without also updating `requirements.txt`.
+
+## 6. Coding conventions
 
 - **Python 3.10+**.
 - Use `pathlib.Path` for all file paths, never string concatenation.
@@ -96,7 +121,7 @@ save_table(df, "summary_stats")       # saves .tex to final_results/tables/ AND 
 - Type hints in function signatures are encouraged but not mandatory.
 - Docstrings: NumPy-style (`Parameters`, `Returns`).
 
-## 6. Git hygiene
+## 7. Git hygiene
 
 - Never commit data files (`.csv`, `.parquet`, `.pkl`, `.pickle`).
 - Never commit figures or LaTeX outputs – they are reproducible.
@@ -106,7 +131,7 @@ save_table(df, "summary_stats")       # saves .tex to final_results/tables/ AND 
 - Each coder works on their own branch for large features; merge to `main`
   via PR or after coordination.
 
-## 7. Adding a new machine
+## 8. Adding a new machine
 
 Run this to get your machine id:
 ```bash
@@ -115,7 +140,7 @@ python -c "import socket,os; print(f'{os.getlogin()}@{socket.gethostname()}')"
 Then add your entry to `_MACHINE_CONFIGS` in `config.py` with your
 `overleaf` and `raw_data` paths.
 
-## 8. Important rules for Claude instances
+## 9. Important rules for Claude instances
 
 - Always read `config.py` before modifying paths.
 - Always use `save_figure` / `save_table` – never save to only one location.
