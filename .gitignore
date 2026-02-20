@@ -1,0 +1,47 @@
+# ── Data (never commit) ──────────────────────────────────────────────────────
+processed_data/
+intermediary_results/
+final_results/
+*.csv
+*.parquet
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.feather
+*.sas7bdat
+*.dta
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.so
+.venv/
+venv/
+env/
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Jupyter ──────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── LaTeX (generated locally, also pushed to Overleaf separately) ────────────
+*.aux
+*.log
+*.out
+*.bbl
+*.blg
+*.synctex.gz
