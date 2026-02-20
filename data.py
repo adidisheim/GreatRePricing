@@ -79,12 +79,30 @@ def _load_or_reload(
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-# ── example (uncomment / adapt when data is ready) ────────────────────────────
-# def load_crsp(reload: bool = False) -> pd.DataFrame:
-#     """Load CRSP monthly stock file."""
-#     def _raw():
-#         df = pd.read_csv(PATH['RAW_DATA'] / 'crsp_monthly.csv', parse_dates=['date'])
-#         df = df[df['shrcd'].isin([10, 11])]  # common shares only
-#         df = df[df['exchcd'].isin([1, 2, 3])]  # NYSE/AMEX/NASDAQ
-#         return df
-#     return _load_or_reload('crsp', _raw, fmt='parquet', reload=reload)
+# ── CRSP monthly ──────────────────────────────────────────────────────────────
+
+def load_crsp(reload: bool = False) -> pd.DataFrame:
+    """
+    Load CRSP monthly stock file (common shares, shrcd 10/11).
+
+    Raw source: RAW_DATA/crsp_monthly.parquet  (created by wrds_import.py)
+    Cache:      PROCESSED_DATA/crsp.parquet
+
+    Columns after processing:
+        permno, permco, date, ret, retx, prc, altprc, vol, shrout,
+        bid, ask, cfacpr, cfacshr, shrcd, exchcd, siccd, naics,
+        hsiccd, ticker, comnam, mktcap, spread
+    """
+    def _raw():
+        raw_file = PATH["RAW_DATA"] / "crsp_monthly.parquet"
+        if not raw_file.exists():
+            raise FileNotFoundError(
+                f"Raw CRSP file not found at {raw_file}.\n"
+                "Run:  .venv/bin/python wrds_import.py crsp"
+            )
+        df = pd.read_parquet(raw_file)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values(["permno", "date"]).reset_index(drop=True)
+        return df
+
+    return _load_or_reload("crsp", _raw, fmt="parquet", reload=reload)
