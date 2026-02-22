@@ -56,10 +56,10 @@ _MACHINE_CONFIGS = {
     # },
 
     # ── Luciano ────────────────────────────────────────────────────────────
-    # "luciano@lucianos-machine": {
-    #     "overleaf": "/Users/luciano/Dropbox/Apps/Overleaf/GreatRePricing",
-    #     "raw_data": "/Users/luciano/Dropbox/Melbourne/research/GreatRePricing_data",
-    # },
+    "somoza@EBS-00942": {
+        "overleaf": "C:/Users/somoza/Dropbox/Applications/Overleaf/GreatRePricing",
+        "raw_data": "C:/Users/somoza/Dropbox/GreatRePricing_data",
+    },
 }
 
 # ── resolve paths ─────────────────────────────────────────────────────────────
