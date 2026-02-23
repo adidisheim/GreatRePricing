@@ -7,6 +7,7 @@ day-to-day caching via the reload pattern.
 
 Usage:
     .venv/bin/python wrds_import.py crsp          # download CRSP monthly
+    .venv/bin/python wrds_import.py optionm       # download OptionMetrics agg (1996-2025, ~3h)
     .venv/bin/python wrds_import.py --list         # list available downloads
     .venv/bin/python wrds_import.py --all          # download everything
 
@@ -48,6 +49,7 @@ def download_crsp_monthly() -> None:
         - shrcd, exchcd            share code, exchange code
         - siccd, naics             SIC & NAICS industry codes
         - hsiccd                   historical SIC code
+        - ncusip                   8-digit historical CUSIP (for linking)
         - ticker, comnam           ticker symbol, company name
     """
     print("[wrds_import] Downloading CRSP monthly ...")
@@ -64,6 +66,7 @@ def download_crsp_monthly() -> None:
             b.shrcd, b.exchcd,
             b.siccd, b.naics,
             b.hsiccd,
+            b.ncusip,
             b.ticker, b.comnam
         FROM crsp.msf AS a
         LEFT JOIN crsp.msenames AS b
@@ -198,12 +201,150 @@ def download_jkp_characteristics(country_set: str = "us") -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  OPTIONMETRICS – aggregated option volume & open interest
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Year range for OptionMetrics opprcd tables
+_OM_YEAR_START = 1996
+_OM_YEAR_END   = 2025
+
+
+def _optionm_agg_query(year: int) -> str:
+    """
+    SQL query that aggregates OptionMetrics contract-level data into
+    secid × month × call/put × DTE-bucket × moneyness-bucket.
+
+    Joins with secprd for underlying price to compute moneyness.
+    Filters: impl_volatility > 0, non-null/non-zero underlying price.
+
+    Aggregated columns:
+        total_volume, total_oi, n_obs, avg_iv, avg_abs_delta
+    """
+    return f"""
+        SELECT
+            b.secid,
+            DATE_TRUNC('month', b.date)::date  AS ym,
+            b.cp_flag,
+            CASE
+                WHEN (b.exdate - b.date) <= 30  THEN 'short'
+                WHEN (b.exdate - b.date) <= 180 THEN 'medium'
+                ELSE 'long'
+            END AS dte_bucket,
+            CASE
+                WHEN b.cp_flag = 'C'
+                     AND b.strike_price / 1000.0 / ABS(a.close) < 0.95 THEN 'ITM'
+                WHEN b.cp_flag = 'C'
+                     AND b.strike_price / 1000.0 / ABS(a.close) > 1.05 THEN 'OTM'
+                WHEN b.cp_flag = 'P'
+                     AND b.strike_price / 1000.0 / ABS(a.close) > 1.05 THEN 'ITM'
+                WHEN b.cp_flag = 'P'
+                     AND b.strike_price / 1000.0 / ABS(a.close) < 0.95 THEN 'OTM'
+                ELSE 'ATM'
+            END AS moneyness,
+            SUM(b.volume)            AS total_volume,
+            SUM(b.open_interest)     AS total_oi,
+            COUNT(*)                 AS n_obs,
+            AVG(b.impl_volatility)   AS avg_iv,
+            AVG(ABS(b.delta))        AS avg_abs_delta
+        FROM optionm.secprd{year} AS a
+        INNER JOIN optionm.opprcd{year} AS b
+            ON a.secid = b.secid AND a.date = b.date
+        WHERE a.close IS NOT NULL
+          AND a.close != 0
+          AND b.impl_volatility > 0
+        GROUP BY
+            b.secid,
+            DATE_TRUNC('month', b.date)::date,
+            b.cp_flag,
+            CASE
+                WHEN (b.exdate - b.date) <= 30  THEN 'short'
+                WHEN (b.exdate - b.date) <= 180 THEN 'medium'
+                ELSE 'long'
+            END,
+            CASE
+                WHEN b.cp_flag = 'C'
+                     AND b.strike_price / 1000.0 / ABS(a.close) < 0.95 THEN 'ITM'
+                WHEN b.cp_flag = 'C'
+                     AND b.strike_price / 1000.0 / ABS(a.close) > 1.05 THEN 'OTM'
+                WHEN b.cp_flag = 'P'
+                     AND b.strike_price / 1000.0 / ABS(a.close) > 1.05 THEN 'ITM'
+                WHEN b.cp_flag = 'P'
+                     AND b.strike_price / 1000.0 / ABS(a.close) < 0.95 THEN 'OTM'
+                ELSE 'ATM'
+            END
+    """
+
+
+def download_optionm_agg() -> None:
+    """
+    Download aggregated option volume & open interest from OptionMetrics.
+
+    Loops year-by-year over opprcd{year} joined with secprd{year}.
+    Aggregates by: secid × month × call/put × DTE bucket × moneyness.
+
+    Also downloads the secnmd identifier table for secid→CUSIP mapping
+    (needed later to link to CRSP permno via CUSIP).
+
+    Output files in RAW_DATA:
+        - optionm_agg.parquet       (aggregated option data)
+        - optionm_secnmd.parquet    (secid → CUSIP/ticker mapping)
+    """
+    import time
+
+    PATH["RAW_DATA"].mkdir(parents=True, exist_ok=True)
+
+    db = get_connection()
+
+    # ── 1. Download secnmd (identifier mapping, ~272K rows) ──────────────
+    print("[wrds_import] Downloading optionm.secnmd ...")
+    secnmd = db.raw_sql(
+        "SELECT secid, effect_date, cusip, ticker, issuer, sic "
+        "FROM optionm.secnmd",
+        date_cols=["effect_date"],
+    )
+    secnmd_out = PATH["RAW_DATA"] / "optionm_secnmd.parquet"
+    secnmd.to_parquet(secnmd_out, index=False)
+    print(f"[wrds_import]   secnmd: {len(secnmd):,} rows → {secnmd_out}")
+
+    # ── 2. Loop over years, aggregate, concatenate ───────────────────────
+    frames = []
+    for year in range(_OM_YEAR_START, _OM_YEAR_END + 1):
+        print(f"[wrds_import]   opprcd{year} ...", end=" ", flush=True)
+        t0 = time.time()
+        try:
+            df_year = db.raw_sql(_optionm_agg_query(year), date_cols=["ym"])
+            elapsed = time.time() - t0
+            print(f"{len(df_year):>10,} rows  ({elapsed:.0f}s)")
+            frames.append(df_year)
+        except Exception as e:
+            elapsed = time.time() - t0
+            print(f"SKIPPED ({e})  ({elapsed:.0f}s)")
+
+    db.close()
+
+    # ── 3. Concatenate and save ──────────────────────────────────────────
+    df = pd.concat(frames, ignore_index=True)
+
+    # Downcast secid to int
+    df["secid"] = df["secid"].astype("Int64")
+
+    df = df.sort_values(["secid", "ym", "cp_flag", "dte_bucket", "moneyness"])
+    df = df.reset_index(drop=True)
+
+    out = PATH["RAW_DATA"] / "optionm_agg.parquet"
+    df.to_parquet(out, index=False)
+    print(f"[wrds_import] OptionMetrics aggregated: {len(df):,} rows, "
+          f"{df['secid'].nunique():,} secids → {out}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  REGISTRY – add new download functions here
 # ══════════════════════════════════════════════════════════════════════════════
 
 DOWNLOADS = {
     "crsp": ("CRSP monthly stock file (shrcd 10/11)", download_crsp_monthly),
     "jkp":  ("JKP 153 characteristics (US)", lambda: download_jkp_characteristics("us")),
+    "optionm": ("OptionMetrics aggregated volume/OI (1996-2025)", download_optionm_agg),
     # "jkp_developed": ("JKP 153 characteristics (developed)", lambda: download_jkp_characteristics("developed")),
     # "compustat":     ("Compustat annual fundamentals", download_compustat),
     # "ff":            ("Fama-French factors", download_ff_factors),

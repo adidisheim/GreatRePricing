@@ -150,28 +150,42 @@ def load_jkp(country_set: str = "us", reload: bool = False) -> pd.DataFrame:
 
 # ── JKP factor returns ───────────────────────────────────────────────────────
 
-def load_jkp_factor_returns(reload: bool = False) -> pd.DataFrame:
+def load_jkp_factor_returns(weighting: str = "vw", reload: bool = False) -> pd.DataFrame:
     """
-    Load JKP long-short factor returns (all countries, all factors, VW, monthly).
+    Load JKP long-short factor returns (all countries, all factors, monthly).
 
     Downloaded from jkpfactors.com.
 
-    Raw source: RAW_DATA/jkp_factor_returns_all_vw.csv
-    Cache:      PROCESSED_DATA/jkp_factor_returns.parquet
+    Parameters
+    ----------
+    weighting : str
+        Portfolio weighting scheme: 'vw' (value-weighted),
+        'ew' (equal-weighted), or 'vw_cap' (value-weighted capped).
+    reload : bool
+        If True, rebuild the cache from the raw CSV.
+
+    Raw source: RAW_DATA/jkp_factor_returns_all_{weighting}.csv
+    Cache:      PROCESSED_DATA/jkp_factor_returns_{weighting}.parquet
 
     Columns:
         location   – country code (e.g. 'usa', 'deu', ...)
         name       – factor abbreviation (153 factors)
         freq       – 'monthly'
-        weighting  – 'vw'
+        weighting  – 'vw', 'ew', or 'vw_cap'
         direction  – sign convention (1 or -1)
         n_stocks   – number of stocks in the portfolio
         n_stocks_min – minimum stocks in any leg
         date       – end-of-month date
         ret        – long-short portfolio return
     """
+    valid = ("vw", "ew", "vw_cap")
+    if weighting not in valid:
+        raise ValueError(f"weighting must be one of {valid}, got '{weighting}'")
+
+    cache_name = f"jkp_factor_returns_{weighting}"
+
     def _raw():
-        raw_file = PATH["RAW_DATA"] / "jkp_factor_returns_all_vw.csv"
+        raw_file = PATH["RAW_DATA"] / f"jkp_factor_returns_all_{weighting}.csv"
         if not raw_file.exists():
             raise FileNotFoundError(
                 f"Raw JKP factor returns not found at {raw_file}.\n"
@@ -182,4 +196,110 @@ def load_jkp_factor_returns(reload: bool = False) -> pd.DataFrame:
         df = df.sort_values(["location", "name", "date"]).reset_index(drop=True)
         return df
 
-    return _load_or_reload("jkp_factor_returns", _raw, fmt="parquet", reload=reload)
+    return _load_or_reload(cache_name, _raw, fmt="parquet", reload=reload)
+
+
+# ── OptionMetrics aggregated volume / open interest ──────────────────────────
+
+def load_optionm_agg(reload: bool = False) -> pd.DataFrame:
+    """
+    Load aggregated option volume & open interest from OptionMetrics.
+
+    Raw source: RAW_DATA/optionm_agg.parquet     (created by wrds_import.py)
+                RAW_DATA/optionm_secnmd.parquet   (secid → CUSIP mapping)
+    Cache:      PROCESSED_DATA/optionm_agg.parquet
+
+    Granularity: secid × month × call/put × DTE bucket × moneyness bucket
+
+    Columns after processing:
+        secid           OptionMetrics security ID (underlying)
+        ym              year-month (datetime)
+        cp_flag         'C' or 'P'
+        dte_bucket      'short' (≤30d), 'medium' (31-180d), 'long' (>180d)
+        moneyness       'ITM', 'ATM', 'OTM'  (relative to call/put convention)
+        total_volume    sum of daily contract volume in the bucket
+        total_oi        sum of daily open interest in the bucket
+        n_obs           number of contract-day observations aggregated
+        avg_iv          average implied volatility in the bucket
+        avg_abs_delta   average |delta| in the bucket
+        cusip           8-digit CUSIP from secnmd (for linking to CRSP)
+        ticker          ticker symbol from secnmd
+
+    To merge with CRSP (permno), join on cusip:
+        crsp = load_crsp()
+        # CRSP's ncusip is 8-digit historical CUSIP
+        merged = optionm.merge(crsp[['permno','date','ncusip']].drop_duplicates(),
+                               left_on=['cusip','ym'], right_on=['ncusip','date'],
+                               how='left')
+    """
+    def _raw():
+        raw_file = PATH["RAW_DATA"] / "optionm_agg.parquet"
+        if not raw_file.exists():
+            raise FileNotFoundError(
+                f"Raw OptionMetrics file not found at {raw_file}.\n"
+                "Run:  .venv/bin/python wrds_import.py optionm"
+            )
+        df = pd.read_parquet(raw_file)
+        df["ym"] = pd.to_datetime(df["ym"])
+
+        # ── attach CUSIP/ticker from secnmd for downstream permno linking ──
+        # Take the latest CUSIP/ticker per secid (most identifiers are
+        # stable; the few that change mid-life we take the final value).
+        secnmd_file = PATH["RAW_DATA"] / "optionm_secnmd.parquet"
+        if secnmd_file.exists():
+            secnmd = pd.read_parquet(secnmd_file)
+            secnmd["effect_date"] = pd.to_datetime(secnmd["effect_date"])
+            secnmd["secid"] = secnmd["secid"].astype("Int64")
+            # Keep the latest record per secid
+            secnmd = (secnmd.sort_values("effect_date")
+                      .drop_duplicates(subset=["secid"], keep="last"))
+            secnmd_map = secnmd[["secid", "cusip", "ticker"]].copy()
+            df = df.merge(secnmd_map, on="secid", how="left")
+
+        df = df.sort_values(["secid", "ym", "cp_flag", "dte_bucket", "moneyness"])
+        df = df.reset_index(drop=True)
+        return df
+
+    return _load_or_reload("optionm_agg", _raw, fmt="parquet", reload=reload)
+
+
+# ── JKP factor details (theme mapping) ───────────────────────────────────
+
+def load_jkp_factor_details(reload: bool = False) -> pd.DataFrame:
+    """
+    Load JKP factor details (theme/group mapping, direction, citations).
+
+    Raw source: RAW_DATA/jkp_factor_details.xlsx
+                (downloaded from github.com/bkelly-lab/jkp-data)
+    Cache:      PROCESSED_DATA/jkp_factor_details.parquet
+
+    Columns after processing (153 published factors only):
+        name            JKP factor abbreviation (matches factor returns 'name')
+        name_full       descriptive factor name
+        theme           factor theme (Momentum, Value, Profitability,
+                        Investment, Intangibles, Trading Frictions, New)
+        direction       sign convention (1 or -1)
+        cite            original paper citation
+    """
+    def _raw():
+        raw_file = PATH["RAW_DATA"] / "jkp_factor_details.xlsx"
+        if not raw_file.exists():
+            raise FileNotFoundError(
+                f"JKP factor details not found at {raw_file}.\n"
+                "Download from https://github.com/bkelly-lab/jkp-data/raw/"
+                "main/data/factor_details.xlsx and place in RAW_DATA."
+            )
+        df = pd.read_excel(raw_file)
+        # Keep only the 153 published JKP factors
+        df = df.dropna(subset=["abr_jkp"]).copy()
+        df = df[["abr_jkp", "name_new", "group", "direction", "cite"]].copy()
+        df = df.rename(columns={
+            "abr_jkp": "name",
+            "name_new": "name_full",
+            "group": "theme",
+        })
+        df["theme"] = df["theme"].str.strip().str.title()
+        df = df.sort_values("name").reset_index(drop=True)
+        return df
+
+    return _load_or_reload("jkp_factor_details", _raw, fmt="parquet", reload=reload)

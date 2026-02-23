@@ -45,7 +45,7 @@ _MACHINE_CONFIGS = {
     # ── Adi ────────────────────────────────────────────────────────────────
     "adidisheim@UML-FNQ2JDW1GV": {
         "overleaf": "/Users/adidisheim/Dropbox/Apps/Overleaf/GreatRePricing",
-        "raw_data": "/Users/adidisheim/Dropbox/Melbourne/research/GreatRePricing_data",
+        "raw_data": "/Users/adidisheim/Dropbox/GreatRePricing_data",
     },
     # ── Mo ─────────────────────────────────────────────────────────────────
     # Run:  python -c "import socket,os; print(f'{os.getlogin()}@{socket.gethostname()}')"
