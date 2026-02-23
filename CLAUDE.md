@@ -150,3 +150,18 @@ Then add your entry to `_MACHINE_CONFIGS` in `config.py` with your
 - When adding a new utility function, put it in the appropriate
   `util_locals/` module.
 - Keep this file (`CLAUDE.md`) up to date when conventions change.
+- **When a new script is pushed to git**, add a brief description to the
+  "Script catalog" section below so other Claude instances on co-author
+  laptops understand what each file does.
+
+## 10. Script catalog
+
+Brief description of each runnable script in the repo.
+
+| Script | Description |
+|---|---|
+| `wrds_import.py` | Downloads raw data from WRDS (CRSP, JKP, OptionMetrics) and saves to `RAW_DATA/`. |
+| `replicate_momo_slides.py` | Replicates CPD analysis from momo_slides.pdf. Produces 2-page PDFs (histogram + spaghetti, dot plot + theme cumret) for each weighting scheme (vw, ew, vw_cap). Uses 13-theme classification, USA only, post-1974. |
+| `cpd_by_country.py` | Country-vs-USA CPD comparison. Each page shows 8 panels (4×2): left column = one country, right column = USA for side-by-side comparison. Covers top 19 non-US countries by stock count. Uses vw_cap weighting, post-1970, 13-theme classification. |
+| `plot_option_interest.py` | Plots OptionMetrics aggregate option volume and open interest over time. |
+| `summary_stats.py` | Produces summary statistics tables for JKP factor returns. |
