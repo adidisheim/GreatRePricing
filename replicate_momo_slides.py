@@ -217,13 +217,13 @@ def make_cpd_pdf(usa, stats_df, cpd_df, wt, wt_label):
         pdf.savefig(fig)
         plt.close(fig)
 
-    print(f"[momo] Saved → {pdf_path}")
+    print(f"[momo] Saved -> {pdf_path}")
 
     # Copy to Overleaf
     overleaf_dir = PATH["OVERLEAF"] / "figures"
     overleaf_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(pdf_path, overleaf_dir / pdf_name)
-    print(f"[momo] Copied → {overleaf_dir / pdf_name}")
+    print(f"[momo] Copied -> {overleaf_dir / pdf_name}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

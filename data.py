@@ -62,7 +62,7 @@ def _load_or_reload(
     else:
         df.to_pickle(cache)
 
-    print(f"[data] Cached → {cache}")
+    print(f"[data] Cached -> {cache}")
     return df
 
 

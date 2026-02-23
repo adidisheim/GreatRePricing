@@ -68,8 +68,8 @@ def save_figure(
     overleaf_path.mkdir(parents=True, exist_ok=True)
     shutil.copy2(local_file, overleaf_path / filename)
 
-    print(f"[save_figure] {filename} → {local_file}")
-    print(f"[save_figure] {filename} → {overleaf_path / filename}")
+    print(f"[save_figure] {filename} -> {local_file}")
+    print(f"[save_figure] {filename} -> {overleaf_path / filename}")
 
 
 # ── LaTeX tables ─────────────────────────────────────────────────────────────
@@ -126,5 +126,5 @@ def save_table(
     overleaf_path.mkdir(parents=True, exist_ok=True)
     (overleaf_path / filename).write_text(latex_str)
 
-    print(f"[save_table] {filename} → {local_file}")
-    print(f"[save_table] {filename} → {overleaf_path / filename}")
+    print(f"[save_table] {filename} -> {local_file}")
+    print(f"[save_table] {filename} -> {overleaf_path / filename}")
