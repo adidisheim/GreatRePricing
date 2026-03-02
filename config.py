@@ -60,6 +60,10 @@ _MACHINE_CONFIGS = {
         "overleaf": "C:/Users/somoza/Dropbox/Applications/Overleaf/GreatRePricing",
         "raw_data": "C:/Users/somoza/Dropbox/GreatRePricing_data",
     },
+    "somoza@EBS-01014": {
+        "overleaf": "C:/Users/somoza/Dropbox/Applications/Overleaf/GreatRePricing",
+        "raw_data": "C:/Users/somoza/Dropbox/GreatRePricing_data",
+    },
 }
 
 # ── resolve paths ─────────────────────────────────────────────────────────────
