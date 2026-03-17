@@ -10,11 +10,11 @@ Correlates each ratio with every country's max-Sharpe 2Y rolling Sharpe,
 monthly return, and 12M rolling return.
 
 Output PDF (global_volumes.pdf):
-  Page 1:  Heatmap -- DM (ex-US) / US ratio correlations
-  Page 2:  World map -- DM (ex-US) / US ratio, 12M return
-  Page 3:  Heatmap -- EM / US ratio correlations
-  Page 4:  World map -- EM / US ratio, 12M return
-  Pages 5+: Per-country 2-panel charts
+  Page 1:  Heatmap -- DM (ex-US) / US ratio correlations (ETF countries)
+  Page 2:  World map -- DM (ex-US) / US ratio, Sharpe (all countries)
+  Page 3:  Heatmap -- EM / US ratio correlations (ETF countries)
+  Page 4:  World map -- EM / US ratio, Sharpe (all countries)
+  Pages 5+: Per-country 2-panel charts (ETF countries)
 
 Usage:
     .venv/Scripts/python global_volumes.py
@@ -77,18 +77,7 @@ COUNTRY_ETFS = {
 
 US_TICKER = "SPY"
 
-COUNTRY_NAMES = {
-    'usa': 'United States', 'jpn': 'Japan', 'chn': 'China',
-    'ind': 'India', 'twn': 'Taiwan', 'gbr': 'United Kingdom',
-    'kor': 'South Korea', 'hkg': 'Hong Kong', 'aus': 'Australia',
-    'can': 'Canada', 'mys': 'Malaysia', 'deu': 'Germany',
-    'fra': 'France', 'vnm': 'Vietnam', 'pol': 'Poland',
-    'tha': 'Thailand', 'sgp': 'Singapore', 'swe': 'Sweden',
-    'idn': 'Indonesia', 'tur': 'Turkiye',
-    'ita': 'Italy', 'esp': 'Spain', 'grc': 'Greece',
-}
-
-# MSCI classification
+# MSCI classification (for ETF-based volume split)
 MARKET_CLASS = {
     'SPY': 'DM', 'EWJ': 'DM', 'EWH': 'DM', 'EWA': 'DM', 'EWU': 'DM',
     'EWD': 'DM', 'EWG': 'DM', 'EWQ': 'DM', 'EWC': 'DM', 'EWS': 'DM',
@@ -98,27 +87,107 @@ MARKET_CLASS = {
     'GREK': 'EM',
 }
 
+# Full country name lookup (all 54 JKP countries)
+COUNTRY_NAMES = {
+    'are': 'UAE', 'arg': 'Argentina', 'aus': 'Australia', 'aut': 'Austria',
+    'bel': 'Belgium', 'bgd': 'Bangladesh', 'bra': 'Brazil', 'can': 'Canada',
+    'che': 'Switzerland', 'chl': 'Chile', 'chn': 'China', 'col': 'Colombia',
+    'deu': 'Germany', 'dnk': 'Denmark', 'egy': 'Egypt', 'esp': 'Spain',
+    'fin': 'Finland', 'fra': 'France', 'gbr': 'United Kingdom',
+    'grc': 'Greece', 'hkg': 'Hong Kong', 'idn': 'Indonesia',
+    'ind': 'India', 'irl': 'Ireland', 'isr': 'Israel', 'ita': 'Italy',
+    'jpn': 'Japan', 'kor': 'South Korea', 'kwt': 'Kuwait',
+    'mar': 'Morocco', 'mex': 'Mexico', 'mys': 'Malaysia',
+    'nga': 'Nigeria', 'nld': 'Netherlands', 'nor': 'Norway',
+    'nzl': 'New Zealand', 'omn': 'Oman', 'pak': 'Pakistan',
+    'per': 'Peru', 'phl': 'Philippines', 'pol': 'Poland',
+    'prt': 'Portugal', 'qat': 'Qatar', 'rus': 'Russia',
+    'sau': 'Saudi Arabia', 'sgp': 'Singapore', 'swe': 'Sweden',
+    'tha': 'Thailand', 'tur': 'Turkiye', 'twn': 'Taiwan',
+    'usa': 'United States', 'ven': 'Venezuela', 'vnm': 'Vietnam',
+    'zaf': 'South Africa',
+}
+
 CONTINENT = {
+    # Americas
     'United States': 'Americas', 'Canada': 'Americas',
-    'United Kingdom': 'Europe', 'Germany': 'Europe',
-    'France': 'Europe', 'Sweden': 'Europe',
-    'Poland': 'Europe', 'Turkiye': 'Europe',
+    'Argentina': 'Americas', 'Brazil': 'Americas', 'Chile': 'Americas',
+    'Colombia': 'Americas', 'Mexico': 'Americas', 'Peru': 'Americas',
+    'Venezuela': 'Americas',
+    # Europe
+    'United Kingdom': 'Europe', 'Germany': 'Europe', 'France': 'Europe',
+    'Sweden': 'Europe', 'Poland': 'Europe', 'Turkiye': 'Europe',
     'Italy': 'Europe', 'Spain': 'Europe', 'Greece': 'Europe',
+    'Austria': 'Europe', 'Belgium': 'Europe', 'Denmark': 'Europe',
+    'Finland': 'Europe', 'Ireland': 'Europe', 'Netherlands': 'Europe',
+    'Norway': 'Europe', 'Portugal': 'Europe', 'Russia': 'Europe',
+    'Switzerland': 'Europe',
+    # Asia-Pacific
     'Japan': 'Asia-Pacific', 'China': 'Asia-Pacific',
     'India': 'Asia-Pacific', 'South Korea': 'Asia-Pacific',
     'Hong Kong': 'Asia-Pacific', 'Taiwan': 'Asia-Pacific',
     'Australia': 'Asia-Pacific', 'Malaysia': 'Asia-Pacific',
     'Singapore': 'Asia-Pacific', 'Thailand': 'Asia-Pacific',
     'Indonesia': 'Asia-Pacific', 'Vietnam': 'Asia-Pacific',
+    'Bangladesh': 'Asia-Pacific', 'New Zealand': 'Asia-Pacific',
+    'Pakistan': 'Asia-Pacific', 'Philippines': 'Asia-Pacific',
+    # Middle East & Africa
+    'UAE': 'Middle East & Africa', 'Egypt': 'Middle East & Africa',
+    'Israel': 'Middle East & Africa', 'Kuwait': 'Middle East & Africa',
+    'Morocco': 'Middle East & Africa', 'Nigeria': 'Middle East & Africa',
+    'Oman': 'Middle East & Africa', 'Qatar': 'Middle East & Africa',
+    'Saudi Arabia': 'Middle East & Africa',
+    'South Africa': 'Middle East & Africa',
 }
 
-CONTINENT_ORDER = ['Americas', 'Europe', 'Asia-Pacific']
+CONTINENT_ORDER = ['Americas', 'Europe', 'Asia-Pacific',
+                   'Middle East & Africa']
 
-# Natural Earth country-name mapping
+# JKP country name -> Natural Earth ADMIN name
 NAME_TO_NE = {
     'United States': 'United States of America',
     'South Korea': 'South Korea',
     'Turkiye': 'Turkey',
+    'UAE': 'United Arab Emirates',
+    'Russia': 'Russia',
+}
+
+# Coordinates for text labels on larger countries
+LABEL_COORDS = {
+    'United States': (-100, 40), 'Canada': (-100, 55),
+    'Argentina': (-64, -35), 'Brazil': (-52, -12),
+    'Chile': (-71, -33), 'Colombia': (-73, 4),
+    'Mexico': (-102, 24), 'Peru': (-75, -10),
+    'Venezuela': (-66, 8),
+    'United Kingdom': (-2, 54), 'Germany': (10, 51),
+    'France': (2, 47), 'Sweden': (16, 62),
+    'Poland': (20, 52), 'Turkiye': (35, 39),
+    'Italy': (12, 43), 'Spain': (-4, 40), 'Greece': (22, 39),
+    'Austria': (14, 47), 'Belgium': (4, 50.5),
+    'Denmark': (10, 56), 'Finland': (26, 64),
+    'Ireland': (-8, 53), 'Netherlands': (5, 52),
+    'Norway': (10, 62), 'Portugal': (-8, 39.5),
+    'Russia': (90, 60), 'Switzerland': (8, 47),
+    'Japan': (138, 37), 'China': (105, 35),
+    'India': (79, 22), 'South Korea': (128, 36),
+    'Australia': (134, -25), 'Indonesia': (118, -3),
+    'Thailand': (101, 15), 'Vietnam': (107, 16),
+    'Pakistan': (69, 30), 'Philippines': (122, 12),
+    'Bangladesh': (90, 24), 'New Zealand': (173, -42),
+    'Egypt': (30, 27), 'Morocco': (-6, 32),
+    'Nigeria': (8, 10), 'South Africa': (25, -30),
+    'Saudi Arabia': (45, 24), 'Israel': (35, 31),
+}
+
+# Small countries that need arrow annotations
+SMALL_ANNOTATIONS = {
+    'Hong Kong': (114.2, 22.3),
+    'Singapore': (103.8, 1.35),
+    'Taiwan': (121.0, 23.7),
+    'Kuwait': (47.5, 29.3),
+    'Qatar': (51.2, 25.3),
+    'Oman': (57.5, 21.5),
+    'Malaysia': (109, 3),
 }
 
 
@@ -129,9 +198,6 @@ NAME_TO_NE = {
 def fetch_volume_ratios() -> tuple[pd.Series, pd.Series]:
     """
     Compute DM (ex-US) / US and EM / US dollar volume ratios (2Y rolling avg).
-
-    Uses all available ETFs at each date (expanding panel); smooths with
-    24-month rolling average.
 
     Returns (dm_ratio, em_ratio).
     """
@@ -147,12 +213,11 @@ def fetch_volume_ratios() -> tuple[pd.Series, pd.Series]:
 
     us_vol = dollar_vol[US_TICKER]
 
-    # Split tickers by market class
     dm_tickers = [t for t, c in MARKET_CLASS.items()
                   if c == "DM" and t != US_TICKER]
     em_tickers = [t for t, c in MARKET_CLASS.items() if c == "EM"]
 
-    # DM (ex-US): sum of available DM volumes at each date
+    # DM (ex-US)
     dm_available = [t for t in dm_tickers if t in dollar_vol.columns]
     dm_vol = dollar_vol[dm_available].sum(axis=1, min_count=1)
     dm_ratio_raw = (dm_vol / us_vol).dropna()
@@ -165,7 +230,7 @@ def fetch_volume_ratios() -> tuple[pd.Series, pd.Series]:
     print(f"    {dm_ratio.index.min().strftime('%Y-%m')} to "
           f"{dm_ratio.index.max().strftime('%Y-%m')} ({len(dm_ratio)} months)")
 
-    # EM: sum of available EM volumes at each date
+    # EM
     em_available = [t for t in em_tickers if t in dollar_vol.columns]
     em_vol = dollar_vol[em_available].sum(axis=1, min_count=1)
     em_ratio_raw = (em_vol / us_vol).dropna()
@@ -189,23 +254,21 @@ def load_portfolios():
             for loc, grp in df.groupby("location")}
 
 
-def get_country_list(portfolios):
-    """Return all JKP codes that have both a portfolio and an ETF."""
+def get_etf_countries(portfolios):
+    """Return JKP codes that have both a portfolio and an ETF (for heatmaps)."""
     etf_codes = {v[0] for v in COUNTRY_ETFS.values()}
     return [loc for loc in portfolios if loc in etf_codes and loc != "usa"]
+
+
+def get_all_countries(portfolios):
+    """Return all JKP codes except USA (for world maps)."""
+    return [loc for loc in portfolios if loc != "usa"]
 
 
 def compute_correlations(ratio, portfolios, countries, ratio_label):
     """
     Compute correlations between a volume ratio and each country's
     max-Sharpe 2Y Sharpe, monthly return, and 12M rolling return.
-
-    Returns
-    -------
-    results : pd.DataFrame
-        Indexed by country name with correlation columns and p-values.
-    country_ports : dict
-        {jkp_code: (label, port_df)} for per-country plotting.
     """
     rows = []
     country_ports = {}
@@ -216,7 +279,6 @@ def compute_correlations(ratio, portfolios, countries, ratio_label):
 
         common = ratio.index.intersection(port.index)
         if len(common) < 24:
-            print(f"  [{label}] SKIPPED (only {len(common)} overlap months)")
             continue
 
         ratio_c = ratio.reindex(common)
@@ -233,7 +295,6 @@ def compute_correlations(ratio, portfolios, countries, ratio_label):
             lambda x: (1 + x).prod() - 1, raw=True).dropna()
         common_ann = ratio_c.index.intersection(annual.index)
 
-        # Correlations
         if len(common_sh) >= 24:
             r_sh, p_sh = pearsonr(ratio_c[common_sh], sharpe[common_sh])
         else:
@@ -287,14 +348,17 @@ def _plot_heatmap(results: pd.DataFrame, ratio_label: str, pdf) -> None:
 
     results = results.copy()
     results["continent"] = results.index.map(CONTINENT)
+    present = [c for c in CONTINENT_ORDER
+               if (results["continent"] == c).any()]
 
-    n_continents = len(CONTINENT_ORDER)
-    counts = [max(1, sum(results["continent"] == c))
-              for c in CONTINENT_ORDER]
-    fig, axes = plt.subplots(n_continents, 1, figsize=(8, 14),
+    n_groups = len(present)
+    counts = [max(1, sum(results["continent"] == c)) for c in present]
+    fig, axes = plt.subplots(n_groups, 1, figsize=(8, 14),
                              gridspec_kw={"height_ratios": counts})
+    if n_groups == 1:
+        axes = [axes]
 
-    for ax_idx, cont in enumerate(CONTINENT_ORDER):
+    for ax_idx, cont in enumerate(present):
         ax = axes[ax_idx]
         sub = results[results["continent"] == cont].copy()
         sub = sub.sort_values("Corr w/ 2Y Sharpe",
@@ -327,7 +391,7 @@ def _plot_heatmap(results: pd.DataFrame, ratio_label: str, pdf) -> None:
                         fontsize=8, color=color)
 
         ax.set_xticks(range(len(metrics)))
-        if ax_idx == n_continents - 1:
+        if ax_idx == n_groups - 1:
             ax.set_xticklabels(metrics, fontsize=9)
         else:
             ax.set_xticklabels([])
@@ -352,12 +416,15 @@ def _plot_heatmap(results: pd.DataFrame, ratio_label: str, pdf) -> None:
 
 
 def _plot_world_map(results: pd.DataFrame, ratio_label: str,
+                    metric: str, metric_label: str,
                     pdf, *, world: gpd.GeoDataFrame) -> None:
-    """World choropleth colored by 12M return correlation."""
+    """World choropleth colored by a given metric."""
     ne_corr = {}
     corr_by_country = {}
     for country in results.index:
-        val = results.loc[country, "Corr w/ 12M Ret"]
+        val = results.loc[country, metric]
+        if np.isnan(val):
+            continue
         corr_by_country[country] = val
         ne_name = NAME_TO_NE.get(country, country)
         ne_corr[ne_name] = val
@@ -380,59 +447,34 @@ def _plot_world_map(results: pd.DataFrame, ratio_label: str,
     sm = plt.cm.ScalarMappable(cmap="RdBu_r", norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, shrink=0.5, pad=0.02, aspect=25)
-    cbar.set_label(f"Corr with {ratio_label} / US Volume Ratio", fontsize=10)
+    cbar.set_label(f"Corr with {ratio_label} / US Volume Ratio",
+                   fontsize=10)
 
-    # Annotate small countries
-    annotations = {
-        "Hong Kong": (114.2, 22.3),
-        "Singapore": (103.8, 1.35),
-        "Taiwan": (121.0, 23.7),
-    }
-    for country, (lon, lat) in annotations.items():
+    # Small countries: arrow annotations
+    for country, (lon, lat) in SMALL_ANNOTATIONS.items():
         if country in corr_by_country:
             val = corr_by_country[country]
             ax.annotate(
                 f"{country}\n{val:+.2f}",
                 xy=(lon, lat),
                 xytext=(lon + 15, lat - 10),
-                fontsize=7, ha="center",
+                fontsize=6, ha="center",
                 arrowprops=dict(arrowstyle="->", color="black",
                                 linewidth=0.7),
                 bbox=dict(boxstyle="round,pad=0.2", fc="white",
                           ec="gray", alpha=0.8),
             )
 
-    # Labels on larger countries
-    label_coords = {
-        "Canada": (-100, 55),
-        "United Kingdom": (-2, 54),
-        "Germany": (10, 51),
-        "France": (2, 47),
-        "Sweden": (16, 62),
-        "Poland": (20, 52),
-        "Turkiye": (35, 39),
-        "Italy": (12, 43),
-        "Spain": (-4, 40),
-        "Greece": (22, 39),
-        "Japan": (138, 37),
-        "China": (105, 35),
-        "India": (79, 22),
-        "South Korea": (128, 36),
-        "Australia": (134, -25),
-        "Malaysia": (109, 3),
-        "Thailand": (101, 15),
-        "Indonesia": (118, -3),
-        "Vietnam": (107, 16),
-    }
-    for country, (lon, lat) in label_coords.items():
-        if country in corr_by_country:
+    # Larger countries: text labels
+    for country, (lon, lat) in LABEL_COORDS.items():
+        if country in corr_by_country and country not in SMALL_ANNOTATIONS:
             val = corr_by_country[country]
             color = "white" if abs(val) > 0.45 else "black"
             ax.text(lon, lat, f"{val:+.2f}", ha="center", va="center",
-                    fontsize=7, fontweight="bold", color=color)
+                    fontsize=6, fontweight="bold", color=color)
 
     ax.set_title(
-        f"Corr({ratio_label} / US Volume Ratio, 12M Rolling Return)",
+        f"Corr({ratio_label} / US Volume Ratio, {metric_label})",
         fontsize=14, fontweight="bold", pad=12)
     ax.set_xlim(-170, 180)
     ax.set_ylim(-60, 85)
@@ -546,28 +588,32 @@ if __name__ == "__main__":
     # 1. Load portfolios
     print("\n[1/4] Loading portfolios ...")
     portfolios = load_portfolios()
-    countries = get_country_list(portfolios)
-    print(f"  {len(countries)} countries: "
-          f"{', '.join(c.upper() for c in sorted(countries))}")
+    etf_countries = get_etf_countries(portfolios)
+    all_countries = get_all_countries(portfolios)
+    print(f"  {len(all_countries)} total countries, "
+          f"{len(etf_countries)} with ETFs")
 
     # 2. Compute volume ratios
     print("\n[2/4] Computing DM and EM volume ratios ...")
     dm_ratio, em_ratio = fetch_volume_ratios()
 
-    # 3. Correlations
+    # 3. Correlations -- all countries (for world maps)
     print("\n[3/4] Computing correlations ...")
 
-    print("\n  --- DM (ex-US) / US ---")
-    dm_results, dm_ports = compute_correlations(
-        dm_ratio, portfolios, countries, "DM (ex-US)")
+    print("\n  --- DM (ex-US) / US  [all countries] ---")
+    dm_results_all, dm_ports = compute_correlations(
+        dm_ratio, portfolios, all_countries, "DM (ex-US)")
+    print(f"\n  {len(dm_results_all)} countries")
 
-    print(f"\n  {len(dm_results)} countries")
+    print("\n  --- EM / US  [all countries] ---")
+    em_results_all, em_ports = compute_correlations(
+        em_ratio, portfolios, all_countries, "EM")
+    print(f"\n  {len(em_results_all)} countries")
 
-    print("\n  --- EM / US ---")
-    em_results, em_ports = compute_correlations(
-        em_ratio, portfolios, countries, "EM")
-
-    print(f"\n  {len(em_results)} countries")
+    # Subset for heatmaps (ETF countries only)
+    etf_labels = {COUNTRY_NAMES[loc] for loc in etf_countries}
+    dm_results_etf = dm_results_all[dm_results_all.index.isin(etf_labels)]
+    em_results_etf = em_results_all[em_results_all.index.isin(etf_labels)]
 
     # 4. Generate PDF
     print("\n[4/4] Generating PDF ...")
@@ -577,29 +623,33 @@ if __name__ == "__main__":
     print("  Loading world shapefile ...")
     world = gpd.read_file(ne_url)
 
-    # Merge country_ports from both (same countries, same ports)
     all_ports = {**dm_ports, **em_ports}
+
+    # JKP code -> market class
+    jkp_class = {}
+    for ticker, (jkp, _) in COUNTRY_ETFS.items():
+        jkp_class[jkp] = MARKET_CLASS.get(ticker, "EM")
 
     with PdfPages(PDF_PATH) as pdf:
         # DM block
-        _plot_heatmap(dm_results, "DM (ex-US)", pdf)
-        print("  World map (DM) ...")
-        _plot_world_map(dm_results, "DM (ex-US)", pdf, world=world)
+        _plot_heatmap(dm_results_etf, "DM (ex-US)", pdf)
+        print("  World map (DM, Sharpe) ...")
+        _plot_world_map(dm_results_all, "DM (ex-US)",
+                        metric="Corr w/ 2Y Sharpe",
+                        metric_label="2Y Rolling Sharpe",
+                        pdf=pdf, world=world)
 
         # EM block
-        _plot_heatmap(em_results, "EM", pdf)
-        print("  World map (EM) ...")
-        _plot_world_map(em_results, "EM", pdf, world=world)
+        _plot_heatmap(em_results_etf, "EM", pdf)
+        print("  World map (EM, Sharpe) ...")
+        _plot_world_map(em_results_all, "EM",
+                        metric="Corr w/ 2Y Sharpe",
+                        metric_label="2Y Rolling Sharpe",
+                        pdf=pdf, world=world)
 
-        # Per-country charts: use DM ratio for DM countries, EM for EM
-        # Build JKP code -> market class lookup
-        jkp_class = {}
-        for ticker, (jkp, _) in COUNTRY_ETFS.items():
-            jkp_class[jkp] = MARKET_CLASS.get(ticker, "EM")
-
+        # Per-country charts (ETF countries only)
         for cont in CONTINENT_ORDER:
-            # DM countries in this continent
-            dm_sub = dm_results[dm_results["continent"] == cont]
+            dm_sub = dm_results_etf[dm_results_etf["continent"] == cont]
             for label in dm_sub.index:
                 loc = next(k for k, v in all_ports.items()
                            if v[0] == label)
@@ -609,8 +659,7 @@ if __name__ == "__main__":
                 r_label = "DM (ex-US)" if cls == "DM" else "EM"
                 _plot_country(label, ratio, r_label, port, pdf)
 
-            # EM countries not already plotted
-            em_sub = em_results[em_results["continent"] == cont]
+            em_sub = em_results_etf[em_results_etf["continent"] == cont]
             for label in em_sub.index:
                 if label in dm_sub.index:
                     continue
@@ -624,9 +673,9 @@ if __name__ == "__main__":
 
     print(f"Saved -> {PDF_PATH}")
 
-    # Summary tables
-    for tag, res in [("DM (ex-US) / US", dm_results),
-                     ("EM / US", em_results)]:
+    # Summary
+    for tag, res in [("DM (ex-US) / US", dm_results_all),
+                     ("EM / US", em_results_all)]:
         print(f"\n{tag}:")
         for cont in CONTINENT_ORDER:
             sub = res[res["continent"] == cont]
