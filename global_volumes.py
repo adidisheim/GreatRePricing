@@ -1,15 +1,14 @@
 """
-Global volumes report: country-specific volume ratios vs max-Sharpe portfolios.
+Global volumes report: non-US / US trading volume ratio vs max-Sharpe portfolios.
 
-For each non-US country, computes its own ETF dollar volume / US SPY dollar
-volume (2Y rolling average), then correlates with that country's max-Sharpe
-2Y rolling Sharpe, monthly return, and 12M rolling return.
+Computes aggregate non-US / US dollar volume ratio (2Y rolling average,
+from iShares ETFs on Yahoo Finance), then correlates with each country's
+max-Sharpe 2Y rolling Sharpe, monthly return, and 12M rolling return.
 
 Output PDF (global_volumes.pdf):
   Page 1:  Heatmap of correlations grouped by continent
   Page 2:  World map color-coded by 12M return correlation
-  Page 3:  World map color-coded by 2Y Sharpe correlation
-  Pages 4+: Per-country 2-panel charts (ratio vs cumret, ratio vs Sharpe)
+  Pages 3+: Per-country 2-panel charts (ratio vs cumret, ratio vs Sharpe)
 
 Usage:
     .venv/Scripts/python global_volumes.py
@@ -68,9 +67,6 @@ COUNTRY_ETFS = {
 
 US_TICKER = "SPY"
 
-# Reverse lookup: JKP code -> ETF ticker
-JKP_TO_ETF = {v[0]: k for k, v in COUNTRY_ETFS.items()}
-
 COUNTRY_NAMES = {
     'usa': 'United States', 'jpn': 'Japan', 'chn': 'China',
     'ind': 'India', 'twn': 'Taiwan', 'gbr': 'United Kingdom',
@@ -108,12 +104,13 @@ NAME_TO_NE = {
 #  DATA
 # =========================================================================
 
-def fetch_country_ratios() -> dict[str, pd.Series]:
+def fetch_volume_ratio() -> pd.Series:
     """
-    Compute country / US dollar volume ratio (2Y rolling average) for each
-    non-US country ETF.
+    Compute non-US / US dollar volume ratio (2Y rolling average).
 
-    Returns dict {jkp_code: pd.Series} with month-end-indexed ratios.
+    Downloads monthly ETF data from Yahoo Finance, filters to complete
+    series, computes aggregate non-US dollar volume / US dollar volume,
+    and smooths with a 2Y rolling average.
     """
     tickers = list(COUNTRY_ETFS.keys())
     print(f"  Downloading {len(tickers)} ETFs from Yahoo Finance ...")
@@ -125,27 +122,36 @@ def fetch_country_ratios() -> dict[str, pd.Series]:
     volume = raw["Volume"]
     dollar_vol = close * volume
 
-    us_vol = dollar_vol[US_TICKER].dropna()
+    # Filter to complete series
+    cutoff = pd.Timestamp(START)
+    complete = dollar_vol.dropna(axis=1, how="all")
+    ok_cols = []
+    for col in complete.columns:
+        s = complete[col].dropna()
+        if len(s) > 0 and s.index.min() <= cutoff + pd.DateOffset(months=2):
+            ok_cols.append(col)
 
-    ratios = {}
-    for ticker, (jkp_code, label) in COUNTRY_ETFS.items():
-        if ticker == US_TICKER:
-            continue
-        country_vol = dollar_vol[ticker].dropna()
-        if len(country_vol) < ROLLING_VOL_WINDOW:
-            print(f"  {label}: too few observations, skipped")
-            continue
+    dropped = set(complete.columns) - set(ok_cols)
+    if dropped:
+        names = sorted(COUNTRY_ETFS[t][1] for t in dropped
+                       if t in COUNTRY_ETFS)
+        print(f"  Dropped (start after {START}): {', '.join(names)}")
 
-        # Align with US, compute ratio, smooth
-        combined = pd.DataFrame({"country": country_vol, "us": us_vol}).dropna()
-        ratio = (combined["country"] / combined["us"]).rolling(
-            ROLLING_VOL_WINDOW).mean().dropna()
-        ratio.index = ratio.index.to_period("M").to_timestamp("M")
-        ratios[jkp_code] = ratio
-        print(f"  {label:<20s} {ratio.index.min().strftime('%Y-%m')} to "
-              f"{ratio.index.max().strftime('%Y-%m')} ({len(ratio)} months)")
+    dv = complete.loc[complete.index >= cutoff, ok_cols].dropna()
+    kept = sorted(COUNTRY_ETFS[t][1] for t in dv.columns
+                  if t in COUNTRY_ETFS)
+    print(f"  Kept {len(dv.columns)} markets from "
+          f"{dv.index.min().strftime('%Y-%m')} ({', '.join(kept)})")
 
-    return ratios
+    # Compute ratio
+    non_us = dv.drop(columns=[US_TICKER], errors="ignore").sum(axis=1)
+    us = dv[US_TICKER]
+    ratio = (non_us / us).rolling(ROLLING_VOL_WINDOW).mean().dropna()
+    ratio.index = ratio.index.to_period("M").to_timestamp("M")
+
+    print(f"  Ratio: {ratio.index.min().strftime('%Y-%m')} to "
+          f"{ratio.index.max().strftime('%Y-%m')} ({len(ratio)} months)")
+    return ratio
 
 
 def load_portfolios():
@@ -167,9 +173,9 @@ def select_top_countries(portfolios, n=TOP_N):
     return proxy.nlargest(n).index.tolist()
 
 
-def compute_correlations(ratios, portfolios, top20):
+def compute_correlations(ratio, portfolios, top20):
     """
-    Compute correlations between each country's volume ratio and its
+    Compute correlations between the volume ratio and each country's
     max-Sharpe 2Y Sharpe, monthly return, and 12M rolling return.
 
     Returns
@@ -183,15 +189,7 @@ def compute_correlations(ratios, portfolios, top20):
     country_ports = {}
 
     for loc in top20:
-        if loc == "usa":
-            continue
         label = COUNTRY_NAMES.get(loc, loc.upper())
-
-        if loc not in ratios:
-            print(f"  [{label:<20s}] no volume data")
-            continue
-
-        ratio = ratios[loc]
         port = portfolios[loc]
 
         common = ratio.index.intersection(port.index)
@@ -319,7 +317,7 @@ def _plot_heatmap(results: pd.DataFrame, pdf) -> None:
                       labelpad=80, va="center")
 
     fig.suptitle(
-        "Corr(Country/US Volume Ratio, Max-Sharpe Performance)",
+        "Corr(Non-US/US Volume Ratio, Max-Sharpe Performance)",
         fontsize=12, fontweight="bold", y=0.98)
     fig.text(0.5, 0.005, "* p<0.10   ** p<0.05   *** p<0.01",
              ha="center", fontsize=9, style="italic")
@@ -332,28 +330,30 @@ def _plot_heatmap(results: pd.DataFrame, pdf) -> None:
     plt.close(fig)
 
 
-def _plot_world_map(results: pd.DataFrame, metric: str, title: str,
-                    cbar_label: str, pdf, *, world: gpd.GeoDataFrame) -> None:
-    """World choropleth colored by a given metric column."""
+def _plot_world_map(results: pd.DataFrame, pdf) -> None:
+    """Page 2: world choropleth colored by 12M return correlation."""
+    ne_url = ("https://naciscdn.org/naturalearth/110m/cultural/"
+              "ne_110m_admin_0_countries.zip")
+    world = gpd.read_file(ne_url)
+
     # Build lookup
     ne_corr = {}
     corr_by_country = {}
     for country in results.index:
-        val = results.loc[country, metric]
+        val = results.loc[country, "Corr w/ 12M Ret"]
         corr_by_country[country] = val
         ne_name = NAME_TO_NE.get(country, country)
         ne_corr[ne_name] = val
 
-    w = world.copy()
-    w["corr"] = w["ADMIN"].map(ne_corr)
+    world["corr"] = world["ADMIN"].map(ne_corr)
 
     fig, ax = plt.subplots(1, 1, figsize=(16, 8))
 
     # Base map
-    w.plot(ax=ax, color="#e0e0e0", edgecolor="white", linewidth=0.3)
+    world.plot(ax=ax, color="#e0e0e0", edgecolor="white", linewidth=0.3)
 
     # Countries with data
-    has_data = w.dropna(subset=["corr"])
+    has_data = world.dropna(subset=["corr"])
     norm = TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1)
     has_data.plot(ax=ax, column="corr", cmap="RdBu_r", norm=norm,
                   edgecolor="white", linewidth=0.5, legend=False)
@@ -362,7 +362,7 @@ def _plot_world_map(results: pd.DataFrame, metric: str, title: str,
     sm = plt.cm.ScalarMappable(cmap="RdBu_r", norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, shrink=0.5, pad=0.02, aspect=25)
-    cbar.set_label(cbar_label, fontsize=10)
+    cbar.set_label("Correlation with Non-US/US Volume Ratio", fontsize=10)
 
     # Annotate small countries
     annotations = {
@@ -386,6 +386,7 @@ def _plot_world_map(results: pd.DataFrame, metric: str, title: str,
 
     # Labels on larger countries
     label_coords = {
+        "United States": (-100, 40),
         "Canada": (-100, 55),
         "United Kingdom": (-2, 54),
         "Germany": (10, 51),
@@ -410,7 +411,9 @@ def _plot_world_map(results: pd.DataFrame, metric: str, title: str,
             ax.text(lon, lat, f"{val:+.2f}", ha="center", va="center",
                     fontsize=7, fontweight="bold", color=color)
 
-    ax.set_title(title, fontsize=14, fontweight="bold", pad=12)
+    ax.set_title(
+        "Corr(Non-US/US Volume Ratio, 12M Rolling Return) by Country",
+        fontsize=14, fontweight="bold", pad=12)
     ax.set_xlim(-170, 180)
     ax.set_ylim(-60, 85)
     ax.set_axis_off()
@@ -444,9 +447,8 @@ def _plot_country(country_label: str, ratio: pd.Series,
     # Panel 1: ratio + cumret
     ax1 = axes[0]
     ln1 = ax1.plot(ratio_c.index, ratio_c.values, color=c_vol, linewidth=1.5,
-                   label=f"{country_label} / US Volume Ratio")
-    ax1.set_ylabel(f"{country_label} / US Dollar Volume", fontsize=10,
-                   color=c_vol)
+                   label="Non-US / US Volume Ratio")
+    ax1.set_ylabel("Non-US / US Dollar Volume", fontsize=10, color=c_vol)
     ax1.tick_params(axis="y", labelcolor=c_vol)
 
     ax1r = ax1.twinx()
@@ -473,7 +475,7 @@ def _plot_country(country_label: str, ratio: pd.Series,
     ax1.legend(handles, [h.get_label() for h in handles],
                loc="upper center", bbox_to_anchor=(0.5, 1.0),
                ncol=2, fontsize=9, framealpha=0.9)
-    ax1.set_title(f"{country_label}: Country/US Volume Ratio "
+    ax1.set_title(f"{country_label}: Non-US/US Volume Ratio "
                   f"vs Max-Sharpe Portfolio",
                   fontsize=12, fontweight="bold", loc="left", pad=18)
     ax1.grid(True, alpha=0.2)
@@ -481,9 +483,8 @@ def _plot_country(country_label: str, ratio: pd.Series,
     # Panel 2: ratio + rolling Sharpe
     ax2 = axes[1]
     ln3 = ax2.plot(ratio_c.index, ratio_c.values, color=c_vol, linewidth=1.5,
-                   label=f"{country_label} / US Volume Ratio")
-    ax2.set_ylabel(f"{country_label} / US Dollar Volume", fontsize=10,
-                   color=c_vol)
+                   label="Non-US / US Volume Ratio")
+    ax2.set_ylabel("Non-US / US Dollar Volume", fontsize=10, color=c_vol)
     ax2.tick_params(axis="y", labelcolor=c_vol)
 
     ax2r = ax2.twinx()
@@ -517,7 +518,7 @@ def _plot_country(country_label: str, ratio: pd.Series,
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Global Volumes Report (country-specific ratios)")
+    print("Global Volumes Report")
     print("=" * 60)
 
     # 1. Load portfolios & select top 20
@@ -526,56 +527,33 @@ if __name__ == "__main__":
     top20 = select_top_countries(portfolios, TOP_N)
     print(f"  Top {TOP_N}: {', '.join(c.upper() for c in top20)}")
 
-    # 2. Compute country-specific volume ratios
-    print("\n[2/4] Computing country / US volume ratios ...")
-    ratios = fetch_country_ratios()
+    # 2. Compute volume ratio
+    print("\n[2/4] Computing non-US / US volume ratio ...")
+    ratio = fetch_volume_ratio()
 
     # 3. Correlations for each country
     print("\n[3/4] Computing correlations per country ...")
-    results, country_ports = compute_correlations(ratios, portfolios, top20)
+    results, country_ports = compute_correlations(ratio, portfolios, top20)
     print(f"\n  {len(results)} countries with sufficient data")
 
     # 4. Generate PDF
     print("\n[4/4] Generating PDF ...")
-
-    # Download Natural Earth once
-    ne_url = ("https://naciscdn.org/naturalearth/110m/cultural/"
-              "ne_110m_admin_0_countries.zip")
-    print("  Loading world shapefile ...")
-    world = gpd.read_file(ne_url)
-
     with PdfPages(PDF_PATH) as pdf:
         # Page 1: heatmap
         _plot_heatmap(results, pdf)
 
-        # Page 2: world map (12M return)
-        print("  World map (12M return) ...")
-        _plot_world_map(
-            results,
-            metric="Corr w/ 12M Ret",
-            title="Corr(Country/US Volume Ratio, 12M Rolling Return)",
-            cbar_label="Correlation",
-            pdf=pdf, world=world,
-        )
+        # Page 2: world map
+        print("  World map ...")
+        _plot_world_map(results, pdf)
 
-        # Page 3: world map (Sharpe)
-        print("  World map (Sharpe) ...")
-        _plot_world_map(
-            results,
-            metric="Corr w/ 2Y Sharpe",
-            title="Corr(Country/US Volume Ratio, 2Y Rolling Sharpe)",
-            cbar_label="Correlation",
-            pdf=pdf, world=world,
-        )
-
-        # Pages 4+: per-country charts grouped by continent
+        # Pages 3+: per-country charts grouped by continent
         for cont in CONTINENT_ORDER:
             sub = results[results["continent"] == cont]
             for label in sub.index:
                 loc = next(k for k, v in country_ports.items()
                            if v[0] == label)
                 _, port = country_ports[loc]
-                _plot_country(label, ratios[loc], port, pdf)
+                _plot_country(label, ratio, port, pdf)
 
     print(f"Saved -> {PDF_PATH}")
 
