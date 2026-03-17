@@ -165,3 +165,5 @@ Brief description of each runnable script in the repo.
 | `cpd_by_country.py` | Country-vs-USA CPD comparison. Each page shows 8 panels (4×2): left column = one country, right column = USA for side-by-side comparison. Covers top 19 non-US countries by stock count. Uses vw_cap weighting, post-1970, 13-theme classification. |
 | `plot_option_interest.py` | Plots OptionMetrics aggregate option volume and open interest over time. |
 | `summary_stats.py` | Produces summary statistics tables for JKP factor returns. |
+| `plot_mvp_sp500_oi.py` | Single-page dual-axis chart: MVP (min-variance factor portfolio, USA vw_cap) cumulative return vs aggregate option open interest. 1990–present. |
+| `global_volumes.py` | Global volumes report: non-US/US trading volume ratio (2Y rolling avg from iShares ETFs) correlated with each top-20 country's max-Sharpe portfolio. Output PDF: continent-grouped heatmap, world choropleth map, per-country dual-axis charts. |
