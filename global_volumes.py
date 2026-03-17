@@ -1,14 +1,20 @@
 """
-Global volumes report: non-US / US trading volume ratio vs max-Sharpe portfolios.
+Global volumes report: DM and EM volume ratios vs max-Sharpe portfolios.
 
-Computes aggregate non-US / US dollar volume ratio (2Y rolling average,
-from iShares ETFs on Yahoo Finance), then correlates with each country's
-max-Sharpe 2Y rolling Sharpe, monthly return, and 12M rolling return.
+Computes two aggregate volume ratios (2Y rolling average):
+  - Developed Markets (ex-US) / US
+  - Emerging Markets / US
+using iShares country ETF dollar volumes from Yahoo Finance.
+
+Correlates each ratio with every country's max-Sharpe 2Y rolling Sharpe,
+monthly return, and 12M rolling return.
 
 Output PDF (global_volumes.pdf):
-  Page 1:  Heatmap of correlations grouped by continent
-  Page 2:  World map color-coded by 12M return correlation
-  Pages 3+: Per-country 2-panel charts (ratio vs cumret, ratio vs Sharpe)
+  Page 1:  Heatmap -- DM (ex-US) / US ratio correlations
+  Page 2:  World map -- DM (ex-US) / US ratio, 12M return
+  Page 3:  Heatmap -- EM / US ratio correlations
+  Page 4:  World map -- EM / US ratio, 12M return
+  Pages 5+: Per-country 2-panel charts
 
 Usage:
     .venv/Scripts/python global_volumes.py
@@ -38,24 +44,27 @@ START = "1996-03-01"
 END = "2024-12-31"
 ROLLING_SHARPE_WINDOW = 24
 ROLLING_VOL_WINDOW = 24
-TOP_N = 20
 START_DATE = "1970-01-01"
 
 # iShares country ETFs -- ticker : (JKP code, label)
 COUNTRY_ETFS = {
+    # Developed Markets
     'SPY':  ('usa', 'United States'),
     'EWJ':  ('jpn', 'Japan'),
-    'EWY':  ('kor', 'South Korea'),
     'EWH':  ('hkg', 'Hong Kong'),
-    'EWT':  ('twn', 'Taiwan'),
     'EWA':  ('aus', 'Australia'),
     'EWU':  ('gbr', 'United Kingdom'),
-    'EWM':  ('mys', 'Malaysia'),
     'EWD':  ('swe', 'Sweden'),
     'EWG':  ('deu', 'Germany'),
     'EWQ':  ('fra', 'France'),
     'EWC':  ('can', 'Canada'),
     'EWS':  ('sgp', 'Singapore'),
+    'EWI':  ('ita', 'Italy'),
+    'EWP':  ('esp', 'Spain'),
+    # Emerging Markets
+    'EWY':  ('kor', 'South Korea'),
+    'EWT':  ('twn', 'Taiwan'),
+    'EWM':  ('mys', 'Malaysia'),
     'FXI':  ('chn', 'China'),
     'INDA': ('ind', 'India'),
     'THD':  ('tha', 'Thailand'),
@@ -63,6 +72,7 @@ COUNTRY_ETFS = {
     'EPOL': ('pol', 'Poland'),
     'TUR':  ('tur', 'Turkiye'),
     'VNM':  ('vnm', 'Vietnam'),
+    'GREK': ('grc', 'Greece'),
 }
 
 US_TICKER = "SPY"
@@ -75,6 +85,17 @@ COUNTRY_NAMES = {
     'fra': 'France', 'vnm': 'Vietnam', 'pol': 'Poland',
     'tha': 'Thailand', 'sgp': 'Singapore', 'swe': 'Sweden',
     'idn': 'Indonesia', 'tur': 'Turkiye',
+    'ita': 'Italy', 'esp': 'Spain', 'grc': 'Greece',
+}
+
+# MSCI classification
+MARKET_CLASS = {
+    'SPY': 'DM', 'EWJ': 'DM', 'EWH': 'DM', 'EWA': 'DM', 'EWU': 'DM',
+    'EWD': 'DM', 'EWG': 'DM', 'EWQ': 'DM', 'EWC': 'DM', 'EWS': 'DM',
+    'EWI': 'DM', 'EWP': 'DM',
+    'EWY': 'EM', 'EWT': 'EM', 'EWM': 'EM', 'FXI': 'EM', 'INDA': 'EM',
+    'THD': 'EM', 'EIDO': 'EM', 'EPOL': 'EM', 'TUR': 'EM', 'VNM': 'EM',
+    'GREK': 'EM',
 }
 
 CONTINENT = {
@@ -82,6 +103,7 @@ CONTINENT = {
     'United Kingdom': 'Europe', 'Germany': 'Europe',
     'France': 'Europe', 'Sweden': 'Europe',
     'Poland': 'Europe', 'Turkiye': 'Europe',
+    'Italy': 'Europe', 'Spain': 'Europe', 'Greece': 'Europe',
     'Japan': 'Asia-Pacific', 'China': 'Asia-Pacific',
     'India': 'Asia-Pacific', 'South Korea': 'Asia-Pacific',
     'Hong Kong': 'Asia-Pacific', 'Taiwan': 'Asia-Pacific',
@@ -104,13 +126,14 @@ NAME_TO_NE = {
 #  DATA
 # =========================================================================
 
-def fetch_volume_ratio() -> pd.Series:
+def fetch_volume_ratios() -> tuple[pd.Series, pd.Series]:
     """
-    Compute non-US / US dollar volume ratio (2Y rolling average).
+    Compute DM (ex-US) / US and EM / US dollar volume ratios (2Y rolling avg).
 
-    Downloads monthly ETF data from Yahoo Finance, filters to complete
-    series, computes aggregate non-US dollar volume / US dollar volume,
-    and smooths with a 2Y rolling average.
+    Uses all available ETFs at each date (expanding panel); smooths with
+    24-month rolling average.
+
+    Returns (dm_ratio, em_ratio).
     """
     tickers = list(COUNTRY_ETFS.keys())
     print(f"  Downloading {len(tickers)} ETFs from Yahoo Finance ...")
@@ -122,36 +145,40 @@ def fetch_volume_ratio() -> pd.Series:
     volume = raw["Volume"]
     dollar_vol = close * volume
 
-    # Filter to complete series
-    cutoff = pd.Timestamp(START)
-    complete = dollar_vol.dropna(axis=1, how="all")
-    ok_cols = []
-    for col in complete.columns:
-        s = complete[col].dropna()
-        if len(s) > 0 and s.index.min() <= cutoff + pd.DateOffset(months=2):
-            ok_cols.append(col)
+    us_vol = dollar_vol[US_TICKER]
 
-    dropped = set(complete.columns) - set(ok_cols)
-    if dropped:
-        names = sorted(COUNTRY_ETFS[t][1] for t in dropped
-                       if t in COUNTRY_ETFS)
-        print(f"  Dropped (start after {START}): {', '.join(names)}")
+    # Split tickers by market class
+    dm_tickers = [t for t, c in MARKET_CLASS.items()
+                  if c == "DM" and t != US_TICKER]
+    em_tickers = [t for t, c in MARKET_CLASS.items() if c == "EM"]
 
-    dv = complete.loc[complete.index >= cutoff, ok_cols].dropna()
-    kept = sorted(COUNTRY_ETFS[t][1] for t in dv.columns
-                  if t in COUNTRY_ETFS)
-    print(f"  Kept {len(dv.columns)} markets from "
-          f"{dv.index.min().strftime('%Y-%m')} ({', '.join(kept)})")
+    # DM (ex-US): sum of available DM volumes at each date
+    dm_available = [t for t in dm_tickers if t in dollar_vol.columns]
+    dm_vol = dollar_vol[dm_available].sum(axis=1, min_count=1)
+    dm_ratio_raw = (dm_vol / us_vol).dropna()
+    dm_ratio = dm_ratio_raw.rolling(ROLLING_VOL_WINDOW).mean().dropna()
+    dm_ratio.index = dm_ratio.index.to_period("M").to_timestamp("M")
 
-    # Compute ratio
-    non_us = dv.drop(columns=[US_TICKER], errors="ignore").sum(axis=1)
-    us = dv[US_TICKER]
-    ratio = (non_us / us).rolling(ROLLING_VOL_WINDOW).mean().dropna()
-    ratio.index = ratio.index.to_period("M").to_timestamp("M")
+    dm_names = sorted(COUNTRY_ETFS[t][1] for t in dm_available)
+    print(f"  DM (ex-US): {len(dm_available)} ETFs "
+          f"({', '.join(dm_names)})")
+    print(f"    {dm_ratio.index.min().strftime('%Y-%m')} to "
+          f"{dm_ratio.index.max().strftime('%Y-%m')} ({len(dm_ratio)} months)")
 
-    print(f"  Ratio: {ratio.index.min().strftime('%Y-%m')} to "
-          f"{ratio.index.max().strftime('%Y-%m')} ({len(ratio)} months)")
-    return ratio
+    # EM: sum of available EM volumes at each date
+    em_available = [t for t in em_tickers if t in dollar_vol.columns]
+    em_vol = dollar_vol[em_available].sum(axis=1, min_count=1)
+    em_ratio_raw = (em_vol / us_vol).dropna()
+    em_ratio = em_ratio_raw.rolling(ROLLING_VOL_WINDOW).mean().dropna()
+    em_ratio.index = em_ratio.index.to_period("M").to_timestamp("M")
+
+    em_names = sorted(COUNTRY_ETFS[t][1] for t in em_available)
+    print(f"  EM: {len(em_available)} ETFs "
+          f"({', '.join(em_names)})")
+    print(f"    {em_ratio.index.min().strftime('%Y-%m')} to "
+          f"{em_ratio.index.max().strftime('%Y-%m')} ({len(em_ratio)} months)")
+
+    return dm_ratio, em_ratio
 
 
 def load_portfolios():
@@ -162,20 +189,15 @@ def load_portfolios():
             for loc, grp in df.groupby("location")}
 
 
-def select_top_countries(portfolios, n=TOP_N):
-    """Select top N countries by stock count."""
-    fr = load_jkp_factor_returns(weighting="vw_cap")
-    fr = fr[fr["date"] >= START_DATE].copy()
-    latest = fr["date"].max() - pd.DateOffset(years=1)
-    recent = fr[fr["date"] >= latest]
-    proxy = recent.groupby("location")["n_stocks"].max()
-    proxy = proxy[proxy.index.isin(portfolios.keys())]
-    return proxy.nlargest(n).index.tolist()
+def get_country_list(portfolios):
+    """Return all JKP codes that have both a portfolio and an ETF."""
+    etf_codes = {v[0] for v in COUNTRY_ETFS.values()}
+    return [loc for loc in portfolios if loc in etf_codes and loc != "usa"]
 
 
-def compute_correlations(ratio, portfolios, top20):
+def compute_correlations(ratio, portfolios, countries, ratio_label):
     """
-    Compute correlations between the volume ratio and each country's
+    Compute correlations between a volume ratio and each country's
     max-Sharpe 2Y Sharpe, monthly return, and 12M rolling return.
 
     Returns
@@ -188,7 +210,7 @@ def compute_correlations(ratio, portfolios, top20):
     rows = []
     country_ports = {}
 
-    for loc in top20:
+    for loc in countries:
         label = COUNTRY_NAMES.get(loc, loc.upper())
         port = portfolios[loc]
 
@@ -259,19 +281,18 @@ def compute_correlations(ratio, portfolios, top20):
 #  PLOTTING
 # =========================================================================
 
-def _plot_heatmap(results: pd.DataFrame, pdf) -> None:
-    """Page 1: heatmap of correlations grouped by continent."""
+def _plot_heatmap(results: pd.DataFrame, ratio_label: str, pdf) -> None:
+    """Heatmap of correlations grouped by continent."""
     metrics = ["Corr w/ 2Y Sharpe", "Corr w/ Monthly Ret", "Corr w/ 12M Ret"]
 
     results = results.copy()
     results["continent"] = results.index.map(CONTINENT)
 
     n_continents = len(CONTINENT_ORDER)
+    counts = [max(1, sum(results["continent"] == c))
+              for c in CONTINENT_ORDER]
     fig, axes = plt.subplots(n_continents, 1, figsize=(8, 14),
-                             gridspec_kw={"height_ratios": [
-                                 max(1, sum(results["continent"] == c))
-                                 for c in CONTINENT_ORDER
-                             ]})
+                             gridspec_kw={"height_ratios": counts})
 
     for ax_idx, cont in enumerate(CONTINENT_ORDER):
         ax = axes[ax_idx]
@@ -317,7 +338,7 @@ def _plot_heatmap(results: pd.DataFrame, pdf) -> None:
                       labelpad=80, va="center")
 
     fig.suptitle(
-        "Corr(Non-US/US Volume Ratio, Max-Sharpe Performance)",
+        f"Corr({ratio_label} / US Volume, Max-Sharpe Performance)",
         fontsize=12, fontweight="bold", y=0.98)
     fig.text(0.5, 0.005, "* p<0.10   ** p<0.05   *** p<0.01",
              ha="center", fontsize=9, style="italic")
@@ -330,13 +351,9 @@ def _plot_heatmap(results: pd.DataFrame, pdf) -> None:
     plt.close(fig)
 
 
-def _plot_world_map(results: pd.DataFrame, pdf) -> None:
-    """Page 2: world choropleth colored by 12M return correlation."""
-    ne_url = ("https://naciscdn.org/naturalearth/110m/cultural/"
-              "ne_110m_admin_0_countries.zip")
-    world = gpd.read_file(ne_url)
-
-    # Build lookup
+def _plot_world_map(results: pd.DataFrame, ratio_label: str,
+                    pdf, *, world: gpd.GeoDataFrame) -> None:
+    """World choropleth colored by 12M return correlation."""
     ne_corr = {}
     corr_by_country = {}
     for country in results.index:
@@ -345,15 +362,16 @@ def _plot_world_map(results: pd.DataFrame, pdf) -> None:
         ne_name = NAME_TO_NE.get(country, country)
         ne_corr[ne_name] = val
 
-    world["corr"] = world["ADMIN"].map(ne_corr)
+    w = world.copy()
+    w["corr"] = w["ADMIN"].map(ne_corr)
 
     fig, ax = plt.subplots(1, 1, figsize=(16, 8))
 
     # Base map
-    world.plot(ax=ax, color="#e0e0e0", edgecolor="white", linewidth=0.3)
+    w.plot(ax=ax, color="#e0e0e0", edgecolor="white", linewidth=0.3)
 
     # Countries with data
-    has_data = world.dropna(subset=["corr"])
+    has_data = w.dropna(subset=["corr"])
     norm = TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1)
     has_data.plot(ax=ax, column="corr", cmap="RdBu_r", norm=norm,
                   edgecolor="white", linewidth=0.5, legend=False)
@@ -362,7 +380,7 @@ def _plot_world_map(results: pd.DataFrame, pdf) -> None:
     sm = plt.cm.ScalarMappable(cmap="RdBu_r", norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, shrink=0.5, pad=0.02, aspect=25)
-    cbar.set_label("Correlation with Non-US/US Volume Ratio", fontsize=10)
+    cbar.set_label(f"Corr with {ratio_label} / US Volume Ratio", fontsize=10)
 
     # Annotate small countries
     annotations = {
@@ -386,7 +404,6 @@ def _plot_world_map(results: pd.DataFrame, pdf) -> None:
 
     # Labels on larger countries
     label_coords = {
-        "United States": (-100, 40),
         "Canada": (-100, 55),
         "United Kingdom": (-2, 54),
         "Germany": (10, 51),
@@ -394,6 +411,9 @@ def _plot_world_map(results: pd.DataFrame, pdf) -> None:
         "Sweden": (16, 62),
         "Poland": (20, 52),
         "Turkiye": (35, 39),
+        "Italy": (12, 43),
+        "Spain": (-4, 40),
+        "Greece": (22, 39),
         "Japan": (138, 37),
         "China": (105, 35),
         "India": (79, 22),
@@ -412,7 +432,7 @@ def _plot_world_map(results: pd.DataFrame, pdf) -> None:
                     fontsize=7, fontweight="bold", color=color)
 
     ax.set_title(
-        "Corr(Non-US/US Volume Ratio, 12M Rolling Return) by Country",
+        f"Corr({ratio_label} / US Volume Ratio, 12M Rolling Return)",
         fontsize=14, fontweight="bold", pad=12)
     ax.set_xlim(-170, 180)
     ax.set_ylim(-60, 85)
@@ -424,7 +444,7 @@ def _plot_world_map(results: pd.DataFrame, pdf) -> None:
 
 
 def _plot_country(country_label: str, ratio: pd.Series,
-                  port: pd.DataFrame, pdf) -> None:
+                  ratio_label: str, port: pd.DataFrame, pdf) -> None:
     """Two-panel chart for one country."""
     overlap = ratio.index.intersection(port.index)
     if len(overlap) < 24:
@@ -442,13 +462,15 @@ def _plot_country(country_label: str, ratio: pd.Series,
     c_cum = "#d62728"
     c_sh = "#2ca02c"
 
+    vol_label = f"{ratio_label} / US Volume Ratio"
+
     fig, axes = plt.subplots(2, 1, figsize=(14, 9), sharex=True)
 
     # Panel 1: ratio + cumret
     ax1 = axes[0]
     ln1 = ax1.plot(ratio_c.index, ratio_c.values, color=c_vol, linewidth=1.5,
-                   label="Non-US / US Volume Ratio")
-    ax1.set_ylabel("Non-US / US Dollar Volume", fontsize=10, color=c_vol)
+                   label=vol_label)
+    ax1.set_ylabel(vol_label, fontsize=10, color=c_vol)
     ax1.tick_params(axis="y", labelcolor=c_vol)
 
     ax1r = ax1.twinx()
@@ -475,7 +497,7 @@ def _plot_country(country_label: str, ratio: pd.Series,
     ax1.legend(handles, [h.get_label() for h in handles],
                loc="upper center", bbox_to_anchor=(0.5, 1.0),
                ncol=2, fontsize=9, framealpha=0.9)
-    ax1.set_title(f"{country_label}: Non-US/US Volume Ratio "
+    ax1.set_title(f"{country_label}: {ratio_label}/US Volume Ratio "
                   f"vs Max-Sharpe Portfolio",
                   fontsize=12, fontweight="bold", loc="left", pad=18)
     ax1.grid(True, alpha=0.2)
@@ -483,8 +505,8 @@ def _plot_country(country_label: str, ratio: pd.Series,
     # Panel 2: ratio + rolling Sharpe
     ax2 = axes[1]
     ln3 = ax2.plot(ratio_c.index, ratio_c.values, color=c_vol, linewidth=1.5,
-                   label="Non-US / US Volume Ratio")
-    ax2.set_ylabel("Non-US / US Dollar Volume", fontsize=10, color=c_vol)
+                   label=vol_label)
+    ax2.set_ylabel(vol_label, fontsize=10, color=c_vol)
     ax2.tick_params(axis="y", labelcolor=c_vol)
 
     ax2r = ax2.twinx()
@@ -518,58 +540,106 @@ def _plot_country(country_label: str, ratio: pd.Series,
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Global Volumes Report")
+    print("Global Volumes Report (DM / EM split)")
     print("=" * 60)
 
-    # 1. Load portfolios & select top 20
+    # 1. Load portfolios
     print("\n[1/4] Loading portfolios ...")
     portfolios = load_portfolios()
-    top20 = select_top_countries(portfolios, TOP_N)
-    print(f"  Top {TOP_N}: {', '.join(c.upper() for c in top20)}")
+    countries = get_country_list(portfolios)
+    print(f"  {len(countries)} countries: "
+          f"{', '.join(c.upper() for c in sorted(countries))}")
 
-    # 2. Compute volume ratio
-    print("\n[2/4] Computing non-US / US volume ratio ...")
-    ratio = fetch_volume_ratio()
+    # 2. Compute volume ratios
+    print("\n[2/4] Computing DM and EM volume ratios ...")
+    dm_ratio, em_ratio = fetch_volume_ratios()
 
-    # 3. Correlations for each country
-    print("\n[3/4] Computing correlations per country ...")
-    results, country_ports = compute_correlations(ratio, portfolios, top20)
-    print(f"\n  {len(results)} countries with sufficient data")
+    # 3. Correlations
+    print("\n[3/4] Computing correlations ...")
+
+    print("\n  --- DM (ex-US) / US ---")
+    dm_results, dm_ports = compute_correlations(
+        dm_ratio, portfolios, countries, "DM (ex-US)")
+
+    print(f"\n  {len(dm_results)} countries")
+
+    print("\n  --- EM / US ---")
+    em_results, em_ports = compute_correlations(
+        em_ratio, portfolios, countries, "EM")
+
+    print(f"\n  {len(em_results)} countries")
 
     # 4. Generate PDF
     print("\n[4/4] Generating PDF ...")
+
+    ne_url = ("https://naciscdn.org/naturalearth/110m/cultural/"
+              "ne_110m_admin_0_countries.zip")
+    print("  Loading world shapefile ...")
+    world = gpd.read_file(ne_url)
+
+    # Merge country_ports from both (same countries, same ports)
+    all_ports = {**dm_ports, **em_ports}
+
     with PdfPages(PDF_PATH) as pdf:
-        # Page 1: heatmap
-        _plot_heatmap(results, pdf)
+        # DM block
+        _plot_heatmap(dm_results, "DM (ex-US)", pdf)
+        print("  World map (DM) ...")
+        _plot_world_map(dm_results, "DM (ex-US)", pdf, world=world)
 
-        # Page 2: world map
-        print("  World map ...")
-        _plot_world_map(results, pdf)
+        # EM block
+        _plot_heatmap(em_results, "EM", pdf)
+        print("  World map (EM) ...")
+        _plot_world_map(em_results, "EM", pdf, world=world)
 
-        # Pages 3+: per-country charts grouped by continent
+        # Per-country charts: use DM ratio for DM countries, EM for EM
+        # Build JKP code -> market class lookup
+        jkp_class = {}
+        for ticker, (jkp, _) in COUNTRY_ETFS.items():
+            jkp_class[jkp] = MARKET_CLASS.get(ticker, "EM")
+
         for cont in CONTINENT_ORDER:
-            sub = results[results["continent"] == cont]
-            for label in sub.index:
-                loc = next(k for k, v in country_ports.items()
+            # DM countries in this continent
+            dm_sub = dm_results[dm_results["continent"] == cont]
+            for label in dm_sub.index:
+                loc = next(k for k, v in all_ports.items()
                            if v[0] == label)
-                _, port = country_ports[loc]
-                _plot_country(label, ratio, port, pdf)
+                _, port = all_ports[loc]
+                cls = jkp_class.get(loc, "EM")
+                ratio = dm_ratio if cls == "DM" else em_ratio
+                r_label = "DM (ex-US)" if cls == "DM" else "EM"
+                _plot_country(label, ratio, r_label, port, pdf)
+
+            # EM countries not already plotted
+            em_sub = em_results[em_results["continent"] == cont]
+            for label in em_sub.index:
+                if label in dm_sub.index:
+                    continue
+                loc = next(k for k, v in all_ports.items()
+                           if v[0] == label)
+                _, port = all_ports[loc]
+                cls = jkp_class.get(loc, "EM")
+                ratio = dm_ratio if cls == "DM" else em_ratio
+                r_label = "DM (ex-US)" if cls == "DM" else "EM"
+                _plot_country(label, ratio, r_label, port, pdf)
 
     print(f"Saved -> {PDF_PATH}")
 
-    # Summary table
-    print("\nSummary:")
-    for cont in CONTINENT_ORDER:
-        sub = results[results["continent"] == cont]
-        if sub.empty:
-            continue
-        print(f"\n  {cont}")
-        print(f"  {'Country':<20s} {'Sharpe':>8s} {'MonthRet':>8s} "
-              f"{'12M Ret':>8s} {'n':>5s}")
-        print(f"  {'-' * 50}")
-        for _, row in sub.iterrows():
-            print(f"  {row.name:<20s} {row['Corr w/ 2Y Sharpe']:+8.3f} "
-                  f"{row['Corr w/ Monthly Ret']:+8.3f} "
-                  f"{row['Corr w/ 12M Ret']:+8.3f} {row['n']:5.0f}")
+    # Summary tables
+    for tag, res in [("DM (ex-US) / US", dm_results),
+                     ("EM / US", em_results)]:
+        print(f"\n{tag}:")
+        for cont in CONTINENT_ORDER:
+            sub = res[res["continent"] == cont]
+            if sub.empty:
+                continue
+            print(f"\n  {cont}")
+            print(f"  {'Country':<20s} {'Sharpe':>8s} {'MonthRet':>8s} "
+                  f"{'12M Ret':>8s} {'n':>5s}")
+            print(f"  {'-' * 50}")
+            for _, row in sub.iterrows():
+                print(f"  {row.name:<20s} "
+                      f"{row['Corr w/ 2Y Sharpe']:+8.3f} "
+                      f"{row['Corr w/ Monthly Ret']:+8.3f} "
+                      f"{row['Corr w/ 12M Ret']:+8.3f} {row['n']:5.0f}")
 
     print("\nDone.")
