@@ -142,6 +142,8 @@ Then add your entry to `_MACHINE_CONFIGS` in `config.py` with your
 
 ## 9. Important rules for Claude instances
 
+- **Response channel:** When the user prompts from the terminal session, respond in the session only — do NOT send to Telegram unless explicitly asked. When the user prompts from Telegram, respond on Telegram AND in the session.
+- **You CAN send emails.** `util_locals/email.py` provides `send_email(subject, body, attachments, recipient)` via Gmail SMTP. Credentials are in `.email_config.json` (git-ignored, already configured). When the user asks you to email something, use it — do NOT say you cannot send emails.
 - Always read `config.py` before modifying paths.
 - Always use `save_figure` / `save_table` – never save to only one location.
 - Always use the `_load_or_reload` pattern for new data loaders.
