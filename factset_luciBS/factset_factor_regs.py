@@ -1276,58 +1276,65 @@ def append_latex_sections(results: dict):
     sec5.append(r'\section{Stock-Level IO and Holder Foreign Share}')
     sec5.append('')
     sec5.append(
-        r'We regress stock contributions on the level of institutional ownership (IO) '
-        r'and the average foreign portfolio share of the stock\textquotesingle s holders (HFS). '
-        r'HFS is defined as the value-weighted average, across all institutions holding stock $i$ '
-        r'at quarter $t$, of each institution\textquotesingle s foreign portfolio share '
-        r'(foreign holdings divided by total holdings in dollar terms). '
+        r'We regress stock contributions to the portfolio return on institutional ownership (IO), '
+        r'average foreign portfolio share of the stock\textquotesingle s holders (HFS), and foreign IO. '
+        r'All variables are in levels with two lags. '
+        r'HFS is the value-weighted average, across all institutions holding stock $i$ '
+        r'at quarter $t$, of each institution\textquotesingle s foreign portfolio share. '
         r'Standard errors are clustered at the stock level.'
     )
     sec5.append('')
 
     if 'P5' in results and results['P5']:
         P5 = results['P5']
+        iv_order = ['io', 'io_lag1', 'io_lag2',
+                     'holder_foreign_share', 'holder_foreign_share_lag1', 'holder_foreign_share_lag2',
+                     'io_for', 'io_for_lag1', 'io_for_lag2']
+        iv_labels = {
+            'io': r'IO$_t$', 'io_lag1': r'IO$_{t-1}$', 'io_lag2': r'IO$_{t-2}$',
+            'holder_foreign_share': r'HFS$_t$', 'holder_foreign_share_lag1': r'HFS$_{t-1}$',
+            'holder_foreign_share_lag2': r'HFS$_{t-2}$',
+            'io_for': r'ForIO$_t$', 'io_for_lag1': r'ForIO$_{t-1}$', 'io_for_lag2': r'ForIO$_{t-2}$',
+        }
+        fe_specs = ['No FE', 'Stock FE', 'Time FE', 'Stock+Time FE']
+
         sec5.append(r'\begin{table}[htbp]')
         sec5.append(r'\centering')
-        sec5.append(r'\caption{Stock contribution: IO level and Holder Foreign Share (HFS) level.}')
+        sec5.append(r'\caption{Return contribution (quarterly, levels): IO, HFS, and Foreign IO with two lags.}')
         sec5.append(r'\label{tab:stock_io_hfs}')
         sec5.append(r'\footnotesize')
-        sec5.append(r'\begin{tabular}{@{}l ccc ccc @{}}')
+        sec5.append(r'\begin{tabular}{@{}l cccc @{}}')
         sec5.append(r'\toprule')
-        sec5.append(r' & \multicolumn{3}{c}{No FE} & \multicolumn{3}{c}{Stock FE} \\')
-        sec5.append(r'\cmidrule(lr){2-4} \cmidrule(lr){5-7}')
-        sec5.append(r' & Q & S & A & Q & S & A \\')
+        sec5.append(r' & No FE & Stock FE & Time FE & Stock+Time FE \\')
         sec5.append(r'\midrule')
 
-        for iv, label in [('io', r'$\beta_{\text{IO}}$'), ('holder_foreign_share', r'$\beta_{\text{HFS}}$')]:
+        for iv in iv_order:
+            row_label = f'$\\beta_{{\\text{{{iv_labels[iv]}}}}}$'
             coefs_r, tstats_r = [], []
-            for freq in ['Q', 'S', 'A']:
-                for fe in ['No FE', 'Stock FE']:
-                    r = P5[freq][fe]
-                    c, t, p = r['coefs'][iv]
-                    if np.isnan(c):
-                        coefs_r.append('---')
-                        tstats_r.append('')
+            for fe in fe_specs:
+                r = P5[fe]
+                c, t, p = r['coefs'].get(iv, (np.nan, np.nan, np.nan))
+                if np.isnan(c):
+                    coefs_r.append('---'); tstats_r.append('')
+                else:
+                    stars = '^{***}' if p < 0.01 else '^{**}' if p < 0.05 else '^{*}' if p < 0.1 else ''
+                    sign = '$-$' if c < 0 else ''
+                    ac = abs(c)
+                    if ac < 0.0001 and ac > 0:
+                        exp = int(np.floor(np.log10(ac)))
+                        mantissa = ac / 10 ** exp
+                        coefs_r.append(f'{sign}{mantissa:.2f}\\text{{e}}{exp}${stars}$')
                     else:
-                        stars = '^{***}' if p < 0.01 else '^{**}' if p < 0.05 else '^{*}' if p < 0.1 else ''
-                        sign = '$-$' if c < 0 else ''
-                        ac = abs(c)
-                        if ac < 0.0001 and ac > 0:
-                            exp = int(np.floor(np.log10(ac)))
-                            mantissa = ac / 10 ** exp
-                            coefs_r.append(f'{sign}{mantissa:.2f}\\text{{e}}{exp}${stars}$')
-                        else:
-                            coefs_r.append(f'{sign}{ac:.4f}${stars}$')
-                        tstats_r.append(f'({t:.2f})')
-            sec5.append(f'{label} & {" & ".join(coefs_r)} \\\\')
+                        coefs_r.append(f'{sign}{ac:.4f}${stars}$')
+                    tstats_r.append(f'({t:.2f})')
+            sec5.append(f'{row_label} & {" & ".join(coefs_r)} \\\\')
             sec5.append(f' & {" & ".join(tstats_r)} \\\\[2pt]')
 
         r2_r, n_r = [], []
-        for freq in ['Q', 'S', 'A']:
-            for fe in ['No FE', 'Stock FE']:
-                r = P5[freq][fe]
-                r2_r.append(f'{r["r2"]:.4f}' if not np.isnan(r['r2']) else '---')
-                n_r.append(f'{r["n"]:,}' if r['n'] > 0 else '---')
+        for fe in fe_specs:
+            r = P5[fe]
+            r2_r.append(f'{r["r2"]:.4f}' if not np.isnan(r['r2']) else '---')
+            n_r.append(f'{r["n"]:,}' if r['n'] > 0 else '---')
         sec5.append(f'$R^2_w$ & {" & ".join(r2_r)} \\\\')
         sec5.append(f'$N$ & {" & ".join(n_r)} \\\\')
         sec5.append(r'\bottomrule')
@@ -1430,52 +1437,67 @@ if __name__ == '__main__':
         print(f"  N    = {p3_q_fe['nobs']}")
         print(f"  stocks = {p3_q_fe['n_entities']}")
 
-    # ── Part E: IO level + HFS level regression (Point 5) ─────────────────
-    print("\nPart E: IO level + HFS level regression...")
+    # ── Part E: IO + HFS + ForeignIO levels with 2 lags (Point 5) ─────────
+    print("\nPart E: IO + HFS + ForeignIO levels regression...")
     HFS_MAPPED = PATH['INTERMEDIARY_RESULTS'] / 'holder_foreign_share_mapped.parquet'
     if HFS_MAPPED.exists() and len(stock_panel) > 0:
         from linearmodels.panel import PooledOLS
+        # Load and merge HFS
         hfs = pd.read_parquet(HFS_MAPPED)
         hfs['quarter_date'] = pd.to_datetime(hfs['quarter_date'])
         sp5 = stock_panel.merge(hfs, on=['permno', 'quarter_date'], how='left')
+        sp5 = sp5.sort_values(['permno', 'quarter_date'])
+
+        # IO lags
+        sp5['io_lag1'] = sp5.groupby('permno')['io'].shift(1)
+        sp5['io_lag2'] = sp5.groupby('permno')['io'].shift(2)
+        # HFS lags
+        sp5['holder_foreign_share_lag1'] = sp5.groupby('permno')['holder_foreign_share'].shift(1)
+        sp5['holder_foreign_share_lag2'] = sp5.groupby('permno')['holder_foreign_share'].shift(2)
+
+        # Foreign IO from Ferreira
+        fer_for = pd.read_parquet(PATH['RAW_DATA'] / 'ferreira_ownership.parquet',
+                                  columns=['factset_entity_id', 'rquarter', 'sec_country', 'io_for'])
+        fer_for = fer_for[fer_for['sec_country'] == 'US'].copy()
+        fer_for['rquarter'] = pd.to_datetime(fer_for['rquarter'])
+        sp5 = sp5.merge(fer_for[['factset_entity_id', 'rquarter', 'io_for']],
+                        left_on=['factset_entity_id', 'quarter_date'],
+                        right_on=['factset_entity_id', 'rquarter'], how='left').drop(columns='rquarter')
+        sp5 = sp5.sort_values(['permno', 'quarter_date'])
+        sp5['io_for_lag1'] = sp5.groupby('permno')['io_for'].shift(1)
+        sp5['io_for_lag2'] = sp5.groupby('permno')['io_for'].shift(2)
+
+        ivs = ['io', 'io_lag1', 'io_lag2',
+               'holder_foreign_share', 'holder_foreign_share_lag1', 'holder_foreign_share_lag2',
+               'io_for', 'io_for_lag1', 'io_for_lag2']
 
         P5 = {}
-        for freq in ['Q', 'S', 'A']:
-            P5[freq] = {}
-            if freq == 'Q':
-                pdf = sp5.copy()
-                tcol = 'quarter_date'
+        tcol = 'quarter_date'
+        for fe_label, ent_fe, time_fe in [
+            ('No FE', False, False),
+            ('Stock FE', True, False),
+            ('Time FE', False, True),
+            ('Stock+Time FE', True, True),
+        ]:
+            sub = sp5[['permno', tcol, 'contribution'] + ivs].dropna()
+            if len(sub) < 50:
+                P5[fe_label] = {'coefs': {iv: (np.nan, np.nan, np.nan) for iv in ivs}, 'r2': np.nan, 'n': 0}
+                continue
+            sub = sub.set_index(['permno', tcol])
+            if not ent_fe and not time_fe:
+                mod = PooledOLS(sub['contribution'], sub[ivs], check_rank=False)
             else:
-                pdf = sp5.copy()
-                if freq == 'S':
-                    pdf['period'] = pdf['quarter_date'].dt.year * 10 + np.where(pdf['quarter_date'].dt.month <= 6, 1, 2)
-                else:
-                    pdf['period'] = pdf['quarter_date'].dt.year
-                agg_d = {'contribution': 'sum', 'io': 'mean', 'holder_foreign_share': 'mean'}
-                pdf = pdf.groupby(['permno', 'period']).agg(agg_d).reset_index()
-                if freq == 'S':
-                    pdf['date'] = pdf['period'].apply(lambda p: pd.Timestamp(p // 10, 6 if p % 10 == 1 else 12, 30))
-                else:
-                    pdf['date'] = pdf['period'].apply(lambda p: pd.Timestamp(p, 12, 31))
-                tcol = 'date'
-
-            ivs = ['io', 'holder_foreign_share']
-            for fe_label, use_entity_fe in [('No FE', False), ('Stock FE', True)]:
-                sub = pdf[['permno', tcol, 'contribution'] + ivs].dropna()
-                if len(sub) < 50:
-                    P5[freq][fe_label] = {'coefs': {iv: (np.nan, np.nan, np.nan) for iv in ivs}, 'r2': np.nan, 'n': 0}
-                    continue
-                sub = sub.set_index(['permno', tcol])
-                if use_entity_fe:
-                    mod = PanelOLS(sub['contribution'], sub[ivs], entity_effects=True, time_effects=False, check_rank=False)
-                else:
-                    mod = PooledOLS(sub['contribution'], sub[ivs], check_rank=False)
-                res = mod.fit(cov_type='clustered', cluster_entity=True)
-                coefs = {iv: (res.params[iv], res.tstats[iv], res.pvalues[iv]) for iv in ivs}
-                P5[freq][fe_label] = {'coefs': coefs, 'r2': res.rsquared_within if hasattr(res, 'rsquared_within') else res.rsquared, 'n': int(res.nobs)}
-                c_io, t_io, _ = coefs['io']
-                c_hfs, t_hfs, _ = coefs['holder_foreign_share']
-                print(f"  {freq} {fe_label}: IO={c_io:.6f} (t={t_io:.2f}), HFS={c_hfs:.6f} (t={t_hfs:.2f}), N={int(res.nobs):,}")
+                mod = PanelOLS(sub['contribution'], sub[ivs],
+                               entity_effects=ent_fe, time_effects=time_fe, check_rank=False)
+            res = mod.fit(cov_type='clustered', cluster_entity=True)
+            coefs = {iv: (res.params[iv], res.tstats[iv], res.pvalues[iv]) for iv in ivs}
+            r2 = res.rsquared_within if hasattr(res, 'rsquared_within') else res.rsquared
+            P5[fe_label] = {'coefs': coefs, 'r2': r2, 'n': int(res.nobs)}
+            print(f"  {fe_label}: N={int(res.nobs):,}")
+            for iv in ivs:
+                c, t, p = coefs[iv]
+                s = '***' if p < 0.01 else '**' if p < 0.05 else '*' if p < 0.1 else ''
+                print(f"    {iv}: {c:.6f}{s} (t={t:.2f})")
 
         results['P5'] = P5
     else:
