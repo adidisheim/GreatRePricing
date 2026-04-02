@@ -1340,6 +1340,52 @@ def append_latex_sections(results: dict):
         sec5.append(r'\bottomrule')
         sec5.append(r'\end{tabular}')
         sec5.append(r'\end{table}')
+    # P6: first-differenced DV table
+    if 'P6' in results and results['P6']:
+        P6 = results['P6']
+        sec5.append(r'\begin{table}[htbp]')
+        sec5.append(r'\centering')
+        sec5.append(r'\caption{$\Delta$ Return contribution (quarterly, levels): IO, HFS, and Foreign IO with two lags.}')
+        sec5.append(r'\label{tab:stock_d_ret_level}')
+        sec5.append(r'\footnotesize')
+        sec5.append(r'\begin{tabular}{@{}l cccc @{}}')
+        sec5.append(r'\toprule')
+        sec5.append(r' & No FE & Stock FE & Time FE & Stock+Time FE \\')
+        sec5.append(r'\midrule')
+
+        for iv in iv_order:
+            row_label = f'$\\beta_{{\\text{{{iv_labels[iv]}}}}}$'
+            coefs_r, tstats_r = [], []
+            for fe in fe_specs:
+                r = P6[fe]
+                c, t, p = r['coefs'].get(iv, (np.nan, np.nan, np.nan))
+                if np.isnan(c):
+                    coefs_r.append('---'); tstats_r.append('')
+                else:
+                    stars = '^{***}' if p < 0.01 else '^{**}' if p < 0.05 else '^{*}' if p < 0.1 else ''
+                    sign = '$-$' if c < 0 else ''
+                    ac = abs(c)
+                    if ac < 0.0001 and ac > 0:
+                        exp = int(np.floor(np.log10(ac)))
+                        mantissa = ac / 10 ** exp
+                        coefs_r.append(f'{sign}{mantissa:.2f}\\text{{e}}{exp}${stars}$')
+                    else:
+                        coefs_r.append(f'{sign}{ac:.4f}${stars}$')
+                    tstats_r.append(f'({t:.2f})')
+            sec5.append(f'{row_label} & {" & ".join(coefs_r)} \\\\')
+            sec5.append(f' & {" & ".join(tstats_r)} \\\\[2pt]')
+
+        r2_r, n_r = [], []
+        for fe in fe_specs:
+            r = P6[fe]
+            r2_r.append(f'{r["r2"]:.4f}' if not np.isnan(r['r2']) else '---')
+            n_r.append(f'{r["n"]:,}' if r['n'] > 0 else '---')
+        sec5.append(f'$R^2_w$ & {" & ".join(r2_r)} \\\\')
+        sec5.append(f'$N$ & {" & ".join(n_r)} \\\\')
+        sec5.append(r'\bottomrule')
+        sec5.append(r'\end{tabular}')
+        sec5.append(r'\end{table}')
+
     else:
         sec5.append(r'\textit{Results not available (requires holder\_foreign\_share data).}')
 
@@ -1500,6 +1546,40 @@ if __name__ == '__main__':
                 print(f"    {iv}: {c:.6f}{s} (t={t:.2f})")
 
         results['P5'] = P5
+
+        # ── Part E2: Same but with first-differenced DV ──────────────────────
+        print("\nPart E2: First-differenced return contribution...")
+        sp5 = sp5.sort_values(['permno', 'quarter_date'])
+        sp5['d_contribution'] = sp5.groupby('permno')['contribution'].diff()
+
+        P6 = {}
+        for fe_label, ent_fe, time_fe in [
+            ('No FE', False, False),
+            ('Stock FE', True, False),
+            ('Time FE', False, True),
+            ('Stock+Time FE', True, True),
+        ]:
+            sub = sp5[['permno', tcol, 'd_contribution'] + ivs].dropna()
+            if len(sub) < 50:
+                P6[fe_label] = {'coefs': {iv: (np.nan, np.nan, np.nan) for iv in ivs}, 'r2': np.nan, 'n': 0}
+                continue
+            sub = sub.set_index(['permno', tcol])
+            if not ent_fe and not time_fe:
+                mod = PooledOLS(sub['d_contribution'], sub[ivs], check_rank=False)
+            else:
+                mod = PanelOLS(sub['d_contribution'], sub[ivs],
+                               entity_effects=ent_fe, time_effects=time_fe, check_rank=False)
+            res = mod.fit(cov_type='clustered', cluster_entity=True)
+            coefs = {iv: (res.params[iv], res.tstats[iv], res.pvalues[iv]) for iv in ivs}
+            r2 = res.rsquared_within if hasattr(res, 'rsquared_within') else res.rsquared
+            P6[fe_label] = {'coefs': coefs, 'r2': r2, 'n': int(res.nobs)}
+            print(f"  {fe_label}: N={int(res.nobs):,}")
+            for iv in ivs:
+                c, t, p = coefs[iv]
+                s = '***' if p < 0.01 else '**' if p < 0.05 else '*' if p < 0.1 else ''
+                print(f"    {iv}: {c:.6f}{s} (t={t:.2f})")
+
+        results['P6'] = P6
     else:
         print("  Skipped (no HFS data or no stock panel)")
 
