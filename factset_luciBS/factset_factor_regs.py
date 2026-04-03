@@ -498,6 +498,23 @@ def run_all_regressions(us_panel: pd.DataFrame,
                   f"t={res['tstat']:+.2f}{stars} | R2w={res['r2_within']:.4f} | "
                   f"N={res['nobs']}")
 
+    # ── Point 1b: US only (IO level + foreign IO level) ─────────────────
+    print("\n=== Point 1b: US regressions (IO + foreign IO levels) ===")
+    results['P1b'] = {}
+    P1b_IVS = ['factor_io', 'factor_io_for']
+    for freq in ['Q', 'S', 'A']:
+        results['P1b'][freq] = {}
+        panel_freq = aggregate_to_frequency(us_panel, freq, entity_col='factor')
+        for fe_label, fe_kw in [('FE_entity', dict(entity_fe=True, time_fe=False)),
+                                ('FE_entity_time', dict(entity_fe=True, time_fe=True))]:
+            res = run_panel_regression(panel_freq, entity_col='factor', iv_cols=P1b_IVS, **fe_kw)
+            results['P1b'][freq][fe_label] = res
+            print(f"  {freq} | {fe_label:20s} | R2w={res['r2_within']:.4f} | N={res['nobs']}")
+            for iv in P1b_IVS:
+                c, t, p = res[iv]['coef'], res[iv]['tstat'], res[iv]['pval']
+                s = '***' if p < 0.01 else '**' if p < 0.05 else '*' if p < 0.1 else ''
+                print(f"    {iv}: {c:+.4f}{s} (t={t:+.2f})")
+
     # ── Point 2: All countries (IO level + foreign IO level) ────────────
     print("\n=== Point 2: All-countries regressions (IO + foreign IO levels) ===")
     results['P2'] = {}
@@ -1256,6 +1273,49 @@ def append_latex_sections(results: dict):
     sec2.append(r'\bottomrule')
     sec2.append(r'\end{tabular}')
     sec2.append(r'\end{table}')
+
+    # P1b: US-only table with IO + Foreign IO levels
+    if 'P1b' in results and results['P1b']:
+        P1b = results['P1b']
+        sec2.append(r'\begin{table}[htbp]')
+        sec2.append(r'\centering')
+        sec2.append(r'\caption{Factor-level IO and Foreign IO (levels) vs.\ US factor returns.}')
+        sec2.append(r'\label{tab:reg_factor_us_level}')
+        sec2.append(r'\footnotesize')
+        sec2.append(r'\begin{tabular}{@{}l ccc ccc @{}}')
+        sec2.append(r'\toprule')
+        sec2.append(r' & \multicolumn{3}{c}{Factor FE} & \multicolumn{3}{c}{Factor + Time FE} \\')
+        sec2.append(r'\cmidrule(lr){2-4} \cmidrule(lr){5-7}')
+        sec2.append(r' & Q & S & A & Q & S & A \\')
+        sec2.append(r'\midrule')
+
+        for iv in iv_list:
+            coefs_r, tstats_r = [], []
+            for freq in ['Q', 'S', 'A']:
+                for fe_key, _ in fe_keys:
+                    r = P1b[freq][fe_key]
+                    c = r[iv]['coef']; t = r[iv]['tstat']; p = r[iv]['pval']
+                    if np.isnan(c):
+                        coefs_r.append('---'); tstats_r.append('')
+                    else:
+                        stars = '^{***}' if p < 0.01 else '^{**}' if p < 0.05 else '^{*}' if p < 0.1 else ''
+                        sign = '$-$' if c < 0 else ''
+                        coefs_r.append(f'{sign}{abs(c):.4f}${stars}$')
+                        tstats_r.append(f'({t:.2f})')
+            sec2.append(f'{iv_labels[iv]} & {" & ".join(coefs_r)} \\\\')
+            sec2.append(f' & {" & ".join(tstats_r)} \\\\[2pt]')
+
+        r2_r, n_r = [], []
+        for freq in ['Q', 'S', 'A']:
+            for fe_key, _ in fe_keys:
+                r = P1b[freq][fe_key]
+                r2_r.append(f'{r["r2_within"]:.4f}')
+                n_r.append(f'{r["nobs"]:,}')
+        sec2.append(f'$R^2_w$ & {" & ".join(r2_r)} \\\\')
+        sec2.append(f'$N$ & {" & ".join(n_r)} \\\\')
+        sec2.append(r'\bottomrule')
+        sec2.append(r'\end{tabular}')
+        sec2.append(r'\end{table}')
 
     # ── Section 3: Stock-Level IO and US Optimal Portfolio Contributions ──
     sec3 = []
