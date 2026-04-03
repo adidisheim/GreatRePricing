@@ -42,7 +42,7 @@ def load_ferreira_us_io() -> pd.DataFrame:
     print("  Loading Ferreira ownership (US) ...")
     df = pd.read_parquet(
         PATH['RAW_DATA'] / 'ferreira_ownership.parquet',
-        columns=['factset_entity_id', 'quarter', 'rquarter', 'sec_country', 'io', 'io_for']
+        columns=['factset_entity_id', 'quarter', 'rquarter', 'sec_country', 'io', 'io_for', 'io_from_US']
     )
     df = df[df['sec_country'] == 'US'].copy()
     df['rquarter'] = pd.to_datetime(df['rquarter'])
@@ -53,11 +53,16 @@ def load_ferreira_us_io() -> pd.DataFrame:
     df['dio'] = df['io'] - df['io_lag']
     df = df.dropna(subset=['dio'])
 
-    # Foreign share of IO
     df['io_for'] = df['io_for'].fillna(0)
+    df['io_from_US'] = df['io_from_US'].fillna(0)
+    # Compute foreign share of US IO: what fraction of the stock's US IO is "foreign-directed"
+    # For US stocks: io_from_US = US institutions' holdings. io_for = foreign institutions' holdings.
+    # US foreign share = io_for / io (fraction of total IO that is foreign)
+    df['io_for_share'] = df['io_for'] / df['io'].replace(0, np.nan)
+    df['io_for_share'] = df['io_for_share'].fillna(0)
 
     print(f"    {len(df):,} entity-quarter obs with dIO")
-    return df[['factset_entity_id', 'rquarter', 'io', 'dio', 'io_for']].copy()
+    return df[['factset_entity_id', 'rquarter', 'io', 'dio', 'io_for', 'io_from_US', 'io_for_share']].copy()
 
 
 def load_crosswalk() -> pd.DataFrame:
@@ -154,7 +159,7 @@ def build_factor_dio_panel(reload: bool = False) -> pd.DataFrame:
     all_rows = []
 
     # Pre-index io_data by rquarter for fast lookup
-    io_by_quarter = {rq: grp[['permno', 'dio', 'io', 'io_for']].copy()
+    io_by_quarter = {rq: grp[['permno', 'dio', 'io', 'io_for', 'io_for_share']].copy()
                      for rq, grp in io_data.groupby('rquarter')}
     sort_eom_list = sort_q_df[['sort_eom', 'rquarter']].values.tolist()
 
@@ -243,6 +248,10 @@ def build_factor_dio_panel(reload: bool = False) -> pd.DataFrame:
                                             weights=long_merged['me'])
                 vw_io_for_short = np.average(short_merged['io_for'],
                                              weights=short_merged['me'])
+                vw_fs_long = np.average(long_merged['io_for_share'],
+                                        weights=long_merged['me'])
+                vw_fs_short = np.average(short_merged['io_for_share'],
+                                         weights=short_merged['me'])
 
                 all_rows.append({
                     'factor': factor,
@@ -250,6 +259,7 @@ def build_factor_dio_panel(reload: bool = False) -> pd.DataFrame:
                     'factor_dio': vw_dio_long - vw_dio_short,
                     'factor_io': vw_io_long - vw_io_short,
                     'factor_io_for': vw_io_for_long - vw_io_for_short,
+                    'factor_io_for_share': vw_fs_long - vw_fs_short,
                     'n_long': len(long_merged),
                     'n_short': len(short_merged),
                 })
@@ -313,10 +323,9 @@ def build_all_countries_panel(us_panel: pd.DataFrame) -> pd.DataFrame:
 
     # US dIO and IO level keyed by (factor, quarter_date)
     keep_cols = ['factor', 'quarter_date', 'factor_dio']
-    if 'factor_io' in us_panel.columns:
-        keep_cols.append('factor_io')
-    if 'factor_io_for' in us_panel.columns:
-        keep_cols.append('factor_io_for')
+    for extra in ['factor_io', 'factor_io_for', 'factor_io_for_share']:
+        if extra in us_panel.columns:
+            keep_cols.append(extra)
     us_dio = us_panel[keep_cols].copy()
 
     # Cross-join: for each country's factor returns, attach the US dIO
@@ -357,9 +366,8 @@ def aggregate_to_frequency(panel: pd.DataFrame, freq: str,
     pd.DataFrame with columns: [entity_col, 'date', 'factor_dio', 'factor_ret']
     """
     keep = [entity_col, 'quarter_date', 'factor_dio', 'factor_ret']
-    for extra in ['factor_io', 'factor_io_for', 'factor_io_lag1', 'factor_io_lag2',
-                  'factor_io_for_lag1', 'factor_io_for_lag2']:
-        if extra in panel.columns:
+    for extra in panel.columns:
+        if extra.startswith('factor_io') and extra not in keep:
             keep.append(extra)
     df = panel[keep].copy()
     df = df.dropna(subset=['factor_dio', 'factor_ret'])
@@ -503,7 +511,7 @@ def run_all_regressions(us_panel: pd.DataFrame,
     print("  Adding factor IO lags...")
     for panel, ecol in [(us_panel, 'factor'), (all_panel, 'entity_id')]:
         panel.sort_values([ecol, 'quarter_date'], inplace=True)
-        for col in ['factor_io', 'factor_io_for']:
+        for col in ['factor_io', 'factor_io_for', 'factor_io_for_share']:
             if col in panel.columns:
                 panel[f'{col}_lag1'] = panel.groupby(ecol)[col].shift(1)
                 panel[f'{col}_lag2'] = panel.groupby(ecol)[col].shift(2)
@@ -512,7 +520,8 @@ def run_all_regressions(us_panel: pd.DataFrame,
     print("\n=== Point 1b: US regressions (IO + foreign IO levels + lags) ===")
     results['P1b'] = {}
     P1b_IVS = ['factor_io', 'factor_io_lag1', 'factor_io_lag2',
-               'factor_io_for', 'factor_io_for_lag1', 'factor_io_for_lag2']
+               'factor_io_for', 'factor_io_for_lag1', 'factor_io_for_lag2',
+               'factor_io_for_share', 'factor_io_for_share_lag1', 'factor_io_for_share_lag2']
     for freq in ['Q', 'S', 'A']:
         results['P1b'][freq] = {}
         panel_freq = aggregate_to_frequency(us_panel, freq, entity_col='factor')
@@ -530,7 +539,8 @@ def run_all_regressions(us_panel: pd.DataFrame,
     print("\n=== Point 2: All-countries regressions (IO + foreign IO levels) ===")
     results['P2'] = {}
     P2_IVS = ['factor_io', 'factor_io_lag1', 'factor_io_lag2',
-               'factor_io_for', 'factor_io_for_lag1', 'factor_io_for_lag2']
+               'factor_io_for', 'factor_io_for_lag1', 'factor_io_for_lag2',
+               'factor_io_for_share', 'factor_io_for_share_lag1', 'factor_io_for_share_lag2']
     for freq in ['Q', 'S', 'A']:
         results['P2'][freq] = {}
         panel_freq = aggregate_to_frequency(all_panel, freq, entity_col='entity_id')
@@ -1233,8 +1243,9 @@ def append_latex_sections(results: dict):
     sec2.append('')
     sec2.append(
         r'We extend the analysis to all countries in the JKP dataset. Regressors are '
-        r'the US-computed factor IO level (VW IO of long leg minus VW IO of short leg) and the '
-        r'factor foreign IO level (same construction using only foreign institutional ownership), '
+        r'the US-computed factor IO level (VW IO of long minus short leg), '
+        r'the factor foreign IO level (same construction using only foreign IO), '
+        r'and the foreign share of IO (VW ratio of foreign IO to total IO, long minus short), '
         r'each with two quarterly lags. '
         r'The entity dimension is factor $\times$ country. Standard errors are clustered '
         r'at the entity level.'
@@ -1244,7 +1255,8 @@ def append_latex_sections(results: dict):
     # Build table manually for multi-IV results
     P2 = results['P2']
     iv_list = ['factor_io', 'factor_io_lag1', 'factor_io_lag2',
-               'factor_io_for', 'factor_io_for_lag1', 'factor_io_for_lag2']
+               'factor_io_for', 'factor_io_for_lag1', 'factor_io_for_lag2',
+               'factor_io_for_share', 'factor_io_for_share_lag1', 'factor_io_for_share_lag2']
     iv_labels = {
         'factor_io': r'$\beta_{\text{IO}_t}$',
         'factor_io_lag1': r'$\beta_{\text{IO}_{t-1}}$',
@@ -1252,14 +1264,17 @@ def append_latex_sections(results: dict):
         'factor_io_for': r'$\beta_{\text{ForIO}_t}$',
         'factor_io_for_lag1': r'$\beta_{\text{ForIO}_{t-1}}$',
         'factor_io_for_lag2': r'$\beta_{\text{ForIO}_{t-2}}$',
+        'factor_io_for_share': r'$\beta_{\text{ForShare}_t}$',
+        'factor_io_for_share_lag1': r'$\beta_{\text{ForShare}_{t-1}}$',
+        'factor_io_for_share_lag2': r'$\beta_{\text{ForShare}_{t-2}}$',
     }
     fe_keys = [('FE_entity', 'Entity FE'), ('FE_entity_time', 'Entity + Time FE')]
 
     sec2.append(r'\begin{table}[htbp]')
     sec2.append(r'\centering')
-    sec2.append(r'\caption{Factor-level IO and Foreign IO (levels, two lags) vs.\ global factor returns.}')
+    sec2.append(r'\caption{Factor-level IO, Foreign IO, and Foreign Share (levels, two lags) vs.\ global factor returns.}')
     sec2.append(r'\label{tab:reg_factor_global}')
-    sec2.append(r'\footnotesize')
+    sec2.append(r'\scriptsize')
     sec2.append(r'\begin{tabular}{@{}l ccc ccc @{}}')
     sec2.append(r'\toprule')
     sec2.append(r' & \multicolumn{3}{c}{Entity FE} & \multicolumn{3}{c}{Entity + Time FE} \\')
@@ -1300,9 +1315,9 @@ def append_latex_sections(results: dict):
         P1b = results['P1b']
         sec2.append(r'\begin{table}[htbp]')
         sec2.append(r'\centering')
-        sec2.append(r'\caption{Factor-level IO and Foreign IO (levels, two lags) vs.\ US factor returns.}')
+        sec2.append(r'\caption{Factor-level IO, Foreign IO, and Foreign Share (levels, two lags) vs.\ US factor returns.}')
         sec2.append(r'\label{tab:reg_factor_us_level}')
-        sec2.append(r'\footnotesize')
+        sec2.append(r'\scriptsize')
         sec2.append(r'\begin{tabular}{@{}l ccc ccc @{}}')
         sec2.append(r'\toprule')
         sec2.append(r' & \multicolumn{3}{c}{Factor FE} & \multicolumn{3}{c}{Factor + Time FE} \\')
