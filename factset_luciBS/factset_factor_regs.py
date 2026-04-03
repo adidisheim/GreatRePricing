@@ -22,7 +22,7 @@ import time
 import warnings
 warnings.filterwarnings('ignore')
 
-from linearmodels.panel import PanelOLS
+from linearmodels.panel import PanelOLS, PooledOLS
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
@@ -454,29 +454,33 @@ def run_panel_regression(panel_freq: pd.DataFrame, entity_col: str,
 
     df = df.set_index([entity_col, 'date'])
 
-    fe_kw = {}
-    if entity_fe and time_fe:
-        fe_kw = {'entity_effects': True, 'time_effects': True}
-    elif entity_fe:
-        fe_kw = {'entity_effects': True}
-    elif time_fe:
-        fe_kw = {'time_effects': True}
-
-    mod = PanelOLS(df['factor_ret'], df[iv_cols], check_rank=False, **fe_kw)
+    if not entity_fe and not time_fe:
+        mod = PooledOLS(df['factor_ret'], df[iv_cols], check_rank=False)
+    else:
+        fe_kw = {}
+        if entity_fe and time_fe:
+            fe_kw = {'entity_effects': True, 'time_effects': True}
+        elif entity_fe:
+            fe_kw = {'entity_effects': True}
+        elif time_fe:
+            fe_kw = {'time_effects': True}
+        mod = PanelOLS(df['factor_ret'], df[iv_cols], check_rank=False, **fe_kw)
     res = mod.fit(cov_type='clustered', cluster_entity=True)
+
+    r2 = res.rsquared_within if hasattr(res, 'rsquared_within') else res.rsquared
 
     if len(iv_cols) == 1:
         iv = iv_cols[0]
         return {
             'coef': res.params[iv], 'tstat': res.tstats[iv], 'pval': res.pvalues[iv],
-            'r2_within': res.rsquared_within, 'nobs': res.nobs,
+            'r2_within': r2, 'nobs': res.nobs,
             'n_entities': df.index.get_level_values(0).nunique(),
         }
     else:
         result = {}
         for iv in iv_cols:
             result[iv] = {'coef': res.params[iv], 'tstat': res.tstats[iv], 'pval': res.pvalues[iv]}
-        result['r2_within'] = res.rsquared_within
+        result['r2_within'] = r2
         result['nobs'] = res.nobs
         result['n_entities'] = df.index.get_level_values(0).nunique()
         return result
@@ -522,10 +526,11 @@ def run_all_regressions(us_panel: pd.DataFrame,
     P1b_IVS = ['factor_io', 'factor_io_lag1', 'factor_io_lag2',
                'factor_io_for', 'factor_io_for_lag1', 'factor_io_for_lag2',
                'factor_io_for_share', 'factor_io_for_share_lag1', 'factor_io_for_share_lag2']
-    for freq in ['Q', 'S', 'A']:
+    for freq in ['Q']:
         results['P1b'][freq] = {}
         panel_freq = aggregate_to_frequency(us_panel, freq, entity_col='factor')
-        for fe_label, fe_kw in [('FE_entity', dict(entity_fe=True, time_fe=False)),
+        for fe_label, fe_kw in [('FE_none', dict(entity_fe=False, time_fe=False)),
+                                ('FE_entity', dict(entity_fe=True, time_fe=False)),
                                 ('FE_entity_time', dict(entity_fe=True, time_fe=True))]:
             res = run_panel_regression(panel_freq, entity_col='factor', iv_cols=P1b_IVS, **fe_kw)
             results['P1b'][freq][fe_label] = res
@@ -1235,25 +1240,20 @@ def append_latex_sections(results: dict):
 
     sec1 = []  # Section 1 (US factor-level) removed
 
-    # ── Section 2: Factor-Level IO and Global Factor Returns ──────────────
+    # ── Section 2: Factor-Level IO and US Factor Returns ────────────────
     sec2 = []
     sec2.append('')
     sec2.append(r'\clearpage')
-    sec2.append(r'\section{Factor-Level IO and Global Factor Returns}')
+    sec2.append(r'\section{Factor-Level IO and US Factor Returns}')
     sec2.append('')
     sec2.append(
-        r'We extend the analysis to all countries in the JKP dataset. Regressors are '
-        r'the US-computed factor IO level (VW IO of long minus short leg), '
-        r'the factor foreign IO level (same construction using only foreign IO), '
-        r'and the foreign share of IO (VW ratio of foreign IO to total IO, long minus short), '
-        r'each with two quarterly lags. '
-        r'The entity dimension is factor $\times$ country. Standard errors are clustered '
-        r'at the entity level.'
+        r'For each JKP factor, we compute the value-weighted IO level, foreign IO level, '
+        r'and foreign share of IO (foreign IO / total IO) for the long and short legs, '
+        r'and take their difference (long minus short). All variables are included with two '
+        r'quarterly lags. Standard errors are clustered at the factor level.'
     )
     sec2.append('')
 
-    # Build table manually for multi-IV results
-    P2 = results['P2']
     iv_list = ['factor_io', 'factor_io_lag1', 'factor_io_lag2',
                'factor_io_for', 'factor_io_for_lag1', 'factor_io_for_lag2',
                'factor_io_for_share', 'factor_io_for_share_lag1', 'factor_io_for_share_lag2']
@@ -1268,25 +1268,24 @@ def append_latex_sections(results: dict):
         'factor_io_for_share_lag1': r'$\beta_{\text{ForShare}_{t-1}}$',
         'factor_io_for_share_lag2': r'$\beta_{\text{ForShare}_{t-2}}$',
     }
-    fe_keys = [('FE_entity', 'Entity FE'), ('FE_entity_time', 'Entity + Time FE')]
+    fe_keys_us = [('FE_none', 'No FE'), ('FE_entity', 'Factor FE'), ('FE_entity_time', 'Factor + Time FE')]
 
-    sec2.append(r'\begin{table}[htbp]')
-    sec2.append(r'\centering')
-    sec2.append(r'\caption{Factor-level IO, Foreign IO, and Foreign Share (levels, two lags) vs.\ global factor returns.}')
-    sec2.append(r'\label{tab:reg_factor_global}')
-    sec2.append(r'\scriptsize')
-    sec2.append(r'\begin{tabular}{@{}l ccc ccc @{}}')
-    sec2.append(r'\toprule')
-    sec2.append(r' & \multicolumn{3}{c}{Entity FE} & \multicolumn{3}{c}{Entity + Time FE} \\')
-    sec2.append(r'\cmidrule(lr){2-4} \cmidrule(lr){5-7}')
-    sec2.append(r' & Q & S & A & Q & S & A \\')
-    sec2.append(r'\midrule')
+    if 'P1b' in results and results['P1b']:
+        P1b = results['P1b']
+        sec2.append(r'\begin{table}[htbp]')
+        sec2.append(r'\centering')
+        sec2.append(r'\caption{Factor-level IO, Foreign IO, and Foreign Share (quarterly, levels, two lags) vs.\ US factor returns.}')
+        sec2.append(r'\label{tab:reg_factor_us_level}')
+        sec2.append(r'\footnotesize')
+        sec2.append(r'\begin{tabular}{@{}l ccc @{}}')
+        sec2.append(r'\toprule')
+        sec2.append(r' & No FE & Factor FE & Factor + Time FE \\')
+        sec2.append(r'\midrule')
 
-    for iv in iv_list:
-        coefs_r, tstats_r = [], []
-        for freq in ['Q', 'S', 'A']:
-            for fe_key, _ in fe_keys:
-                r = P2[freq][fe_key]
+        for iv in iv_list:
+            coefs_r, tstats_r = [], []
+            for fe_key, _ in fe_keys_us:
+                r = P1b['Q'][fe_key]
                 c = r[iv]['coef']; t = r[iv]['tstat']; p = r[iv]['pval']
                 if np.isnan(c):
                     coefs_r.append('---'); tstats_r.append('')
@@ -1295,58 +1294,14 @@ def append_latex_sections(results: dict):
                     sign = '$-$' if c < 0 else ''
                     coefs_r.append(f'{sign}{abs(c):.4f}${stars}$')
                     tstats_r.append(f'({t:.2f})')
-        sec2.append(f'{iv_labels[iv]} & {" & ".join(coefs_r)} \\\\')
-        sec2.append(f' & {" & ".join(tstats_r)} \\\\[2pt]')
-
-    r2_r, n_r = [], []
-    for freq in ['Q', 'S', 'A']:
-        for fe_key, _ in fe_keys:
-            r = P2[freq][fe_key]
-            r2_r.append(f'{r["r2_within"]:.4f}')
-            n_r.append(f'{r["nobs"]:,}')
-    sec2.append(f'$R^2_w$ & {" & ".join(r2_r)} \\\\')
-    sec2.append(f'$N$ & {" & ".join(n_r)} \\\\')
-    sec2.append(r'\bottomrule')
-    sec2.append(r'\end{tabular}')
-    sec2.append(r'\end{table}')
-
-    # P1b: US-only table with IO + Foreign IO levels
-    if 'P1b' in results and results['P1b']:
-        P1b = results['P1b']
-        sec2.append(r'\begin{table}[htbp]')
-        sec2.append(r'\centering')
-        sec2.append(r'\caption{Factor-level IO, Foreign IO, and Foreign Share (levels, two lags) vs.\ US factor returns.}')
-        sec2.append(r'\label{tab:reg_factor_us_level}')
-        sec2.append(r'\scriptsize')
-        sec2.append(r'\begin{tabular}{@{}l ccc ccc @{}}')
-        sec2.append(r'\toprule')
-        sec2.append(r' & \multicolumn{3}{c}{Factor FE} & \multicolumn{3}{c}{Factor + Time FE} \\')
-        sec2.append(r'\cmidrule(lr){2-4} \cmidrule(lr){5-7}')
-        sec2.append(r' & Q & S & A & Q & S & A \\')
-        sec2.append(r'\midrule')
-
-        for iv in iv_list:
-            coefs_r, tstats_r = [], []
-            for freq in ['Q', 'S', 'A']:
-                for fe_key, _ in fe_keys:
-                    r = P1b[freq][fe_key]
-                    c = r[iv]['coef']; t = r[iv]['tstat']; p = r[iv]['pval']
-                    if np.isnan(c):
-                        coefs_r.append('---'); tstats_r.append('')
-                    else:
-                        stars = '^{***}' if p < 0.01 else '^{**}' if p < 0.05 else '^{*}' if p < 0.1 else ''
-                        sign = '$-$' if c < 0 else ''
-                        coefs_r.append(f'{sign}{abs(c):.4f}${stars}$')
-                        tstats_r.append(f'({t:.2f})')
             sec2.append(f'{iv_labels[iv]} & {" & ".join(coefs_r)} \\\\')
             sec2.append(f' & {" & ".join(tstats_r)} \\\\[2pt]')
 
         r2_r, n_r = [], []
-        for freq in ['Q', 'S', 'A']:
-            for fe_key, _ in fe_keys:
-                r = P1b[freq][fe_key]
-                r2_r.append(f'{r["r2_within"]:.4f}')
-                n_r.append(f'{r["nobs"]:,}')
+        for fe_key, _ in fe_keys_us:
+            r = P1b['Q'][fe_key]
+            r2_r.append(f'{r["r2_within"]:.4f}')
+            n_r.append(f'{r["nobs"]:,}')
         sec2.append(f'$R^2_w$ & {" & ".join(r2_r)} \\\\')
         sec2.append(f'$N$ & {" & ".join(n_r)} \\\\')
         sec2.append(r'\bottomrule')
