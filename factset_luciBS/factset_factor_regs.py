@@ -523,9 +523,8 @@ def run_all_regressions(us_panel: pd.DataFrame,
     # ── Point 1b: US only (IO level + foreign IO level + lags) ────────
     print("\n=== Point 1b: US regressions (IO + foreign IO levels + lags) ===")
     results['P1b'] = {}
-    P1b_IVS = ['factor_io', 'factor_io_lag1', 'factor_io_lag2',
-               'factor_io_for', 'factor_io_for_lag1', 'factor_io_for_lag2',
-               'factor_io_for_share', 'factor_io_for_share_lag1', 'factor_io_for_share_lag2']
+    P1b_IVS = ['factor_io',
+               'factor_io_for_share']
     for freq in ['Q']:
         results['P1b'][freq] = {}
         panel_freq = aggregate_to_frequency(us_panel, freq, entity_col='factor')
@@ -1249,24 +1248,16 @@ def append_latex_sections(results: dict):
     sec2.append(
         r'For each JKP factor, we compute the value-weighted IO level, foreign IO level, '
         r'and foreign share of IO (foreign IO / total IO) for the long and short legs, '
-        r'and take their difference (long minus short). All variables are included with two '
-        r'quarterly lags. Standard errors are clustered at the factor level.'
+        r'and take their difference (long minus short). All variables are included with one '
+        r'quarterly lag. Standard errors are clustered at the factor level.'
     )
     sec2.append('')
 
-    iv_list = ['factor_io', 'factor_io_lag1', 'factor_io_lag2',
-               'factor_io_for', 'factor_io_for_lag1', 'factor_io_for_lag2',
-               'factor_io_for_share', 'factor_io_for_share_lag1', 'factor_io_for_share_lag2']
+    iv_list = ['factor_io',
+               'factor_io_for_share']
     iv_labels = {
-        'factor_io': r'$\beta_{\text{IO}_t}$',
-        'factor_io_lag1': r'$\beta_{\text{IO}_{t-1}}$',
-        'factor_io_lag2': r'$\beta_{\text{IO}_{t-2}}$',
-        'factor_io_for': r'$\beta_{\text{ForIO}_t}$',
-        'factor_io_for_lag1': r'$\beta_{\text{ForIO}_{t-1}}$',
-        'factor_io_for_lag2': r'$\beta_{\text{ForIO}_{t-2}}$',
-        'factor_io_for_share': r'$\beta_{\text{ForShare}_t}$',
-        'factor_io_for_share_lag1': r'$\beta_{\text{ForShare}_{t-1}}$',
-        'factor_io_for_share_lag2': r'$\beta_{\text{ForShare}_{t-2}}$',
+        'factor_io': r'$\beta_{\text{IO}}$',
+        'factor_io_for_share': r'$\beta_{\text{ForShare}}$',
     }
     fe_keys_us = [('FE_none', 'No FE'), ('FE_entity', 'Factor FE'), ('FE_entity_time', 'Factor + Time FE')]
 
@@ -1274,7 +1265,7 @@ def append_latex_sections(results: dict):
         P1b = results['P1b']
         sec2.append(r'\begin{table}[htbp]')
         sec2.append(r'\centering')
-        sec2.append(r'\caption{Factor-level IO, Foreign IO, and Foreign Share (quarterly, levels, two lags) vs.\ US factor returns.}')
+        sec2.append(r'\caption{Factor-level IO and Foreign Share (quarterly, levels) vs.\ US factor returns.}')
         sec2.append(r'\label{tab:reg_factor_us_level}')
         sec2.append(r'\footnotesize')
         sec2.append(r'\begin{tabular}{@{}l ccc @{}}')
@@ -1308,36 +1299,8 @@ def append_latex_sections(results: dict):
         sec2.append(r'\end{tabular}')
         sec2.append(r'\end{table}')
 
-    # ── Section 3: Stock-Level IO and US Optimal Portfolio Contributions ──
+    # ── Section 3: (removed) ──
     sec3 = []
-    sec3.append('')
-    sec3.append(r'\clearpage')
-    sec3.append(r'\section{Stock-Level IO and US Optimal Portfolio Contributions}')
-    sec3.append('')
-    sec3.append(
-        r'For each US stock, we compute its contribution to the rolling 48-month '
-        r'max-Sharpe factor portfolio. The contribution of stock $i$ in quarter $t$ '
-        r'is $w_i \times r_i$, where '
-        r'$w_i = \sum_f (w_f \times w_{if})$ '
-        r'aggregates the stock\textquotesingle s value-weighted position across all '
-        r'factor portfolios ($w_f$ = portfolio weight on factor $f$, $w_{if}$ = VW '
-        r'weight of stock $i$ in factor $f$\textquotesingle s long/short leg). '
-        r'The independent variable is $\Delta\text{IO}$ from Ferreira--Matos. '
-        r'Standard errors are clustered at the stock level.'
-    )
-    sec3.append('')
-
-    if 'P3' in results and results['P3']:
-        table3 = _build_stock_table(
-            results['P3'],
-            fe_keys=('FE_stock', 'FE_stock_time'),
-            beta_label=r'$\beta_{\Delta\text{IO}}$',
-            caption=r'Stock-level $\Delta$IO and US optimal portfolio contributions (panel regression).',
-            label='reg_stock_us',
-        )
-        sec3.append(table3)
-    else:
-        sec3.append(r'\textit{Stock-level regression results not available.}')
 
     # ── Section 4: Stock-Level IO and Country Optimal Portfolio Contributions
     sec4 = []
