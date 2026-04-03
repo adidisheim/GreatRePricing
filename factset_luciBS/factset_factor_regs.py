@@ -357,7 +357,8 @@ def aggregate_to_frequency(panel: pd.DataFrame, freq: str,
     pd.DataFrame with columns: [entity_col, 'date', 'factor_dio', 'factor_ret']
     """
     keep = [entity_col, 'quarter_date', 'factor_dio', 'factor_ret']
-    for extra in ['factor_io', 'factor_io_for']:
+    for extra in ['factor_io', 'factor_io_for', 'factor_io_lag1', 'factor_io_lag2',
+                  'factor_io_for_lag1', 'factor_io_for_lag2']:
         if extra in panel.columns:
             keep.append(extra)
     df = panel[keep].copy()
@@ -378,8 +379,8 @@ def aggregate_to_frequency(panel: pd.DataFrame, freq: str,
             factor_ret=('factor_ret', 'sum'),
             factor_dio=('factor_dio', 'mean'),
             n_q=('factor_dio', 'count'),
-            **({'factor_io': ('factor_io', 'mean')} if 'factor_io' in df.columns else {}),
-            **({'factor_io_for': ('factor_io_for', 'mean')} if 'factor_io_for' in df.columns else {})
+            **{c: (c, 'mean') for c in df.columns
+               if c.startswith('factor_io') and c in df.columns}
         ).reset_index()
         # Keep only complete semesters (2 quarters)
         agg = agg[agg['n_q'] == 2].drop(columns='n_q')
@@ -397,8 +398,8 @@ def aggregate_to_frequency(panel: pd.DataFrame, freq: str,
             factor_ret=('factor_ret', 'sum'),
             factor_dio=('factor_dio', 'mean'),
             n_q=('factor_dio', 'count'),
-            **({'factor_io': ('factor_io', 'mean')} if 'factor_io' in df.columns else {}),
-            **({'factor_io_for': ('factor_io_for', 'mean')} if 'factor_io_for' in df.columns else {})
+            **{c: (c, 'mean') for c in df.columns
+               if c.startswith('factor_io') and c in df.columns}
         ).reset_index()
         # Keep only complete years (4 quarters)
         agg = agg[agg['n_q'] == 4].drop(columns='n_q')
@@ -498,10 +499,20 @@ def run_all_regressions(us_panel: pd.DataFrame,
                   f"t={res['tstat']:+.2f}{stars} | R2w={res['r2_within']:.4f} | "
                   f"N={res['nobs']}")
 
-    # ── Point 1b: US only (IO level + foreign IO level) ─────────────────
-    print("\n=== Point 1b: US regressions (IO + foreign IO levels) ===")
+    # ── Add lags to panels ──────────────────────────────────────────────
+    print("  Adding factor IO lags...")
+    for panel, ecol in [(us_panel, 'factor'), (all_panel, 'entity_id')]:
+        panel.sort_values([ecol, 'quarter_date'], inplace=True)
+        for col in ['factor_io', 'factor_io_for']:
+            if col in panel.columns:
+                panel[f'{col}_lag1'] = panel.groupby(ecol)[col].shift(1)
+                panel[f'{col}_lag2'] = panel.groupby(ecol)[col].shift(2)
+
+    # ── Point 1b: US only (IO level + foreign IO level + lags) ────────
+    print("\n=== Point 1b: US regressions (IO + foreign IO levels + lags) ===")
     results['P1b'] = {}
-    P1b_IVS = ['factor_io', 'factor_io_for']
+    P1b_IVS = ['factor_io', 'factor_io_lag1', 'factor_io_lag2',
+               'factor_io_for', 'factor_io_for_lag1', 'factor_io_for_lag2']
     for freq in ['Q', 'S', 'A']:
         results['P1b'][freq] = {}
         panel_freq = aggregate_to_frequency(us_panel, freq, entity_col='factor')
@@ -518,7 +529,8 @@ def run_all_regressions(us_panel: pd.DataFrame,
     # ── Point 2: All countries (IO level + foreign IO level) ────────────
     print("\n=== Point 2: All-countries regressions (IO + foreign IO levels) ===")
     results['P2'] = {}
-    P2_IVS = ['factor_io', 'factor_io_for']
+    P2_IVS = ['factor_io', 'factor_io_lag1', 'factor_io_lag2',
+               'factor_io_for', 'factor_io_for_lag1', 'factor_io_for_lag2']
     for freq in ['Q', 'S', 'A']:
         results['P2'][freq] = {}
         panel_freq = aggregate_to_frequency(all_panel, freq, entity_col='entity_id')
@@ -1220,9 +1232,10 @@ def append_latex_sections(results: dict):
     sec2.append(r'\section{Factor-Level IO and Global Factor Returns}')
     sec2.append('')
     sec2.append(
-        r'We extend the analysis to all countries in the JKP dataset. Two regressors are included: '
+        r'We extend the analysis to all countries in the JKP dataset. Regressors are '
         r'the US-computed factor IO level (VW IO of long leg minus VW IO of short leg) and the '
-        r'factor foreign IO level (same construction using only foreign institutional ownership). '
+        r'factor foreign IO level (same construction using only foreign institutional ownership), '
+        r'each with two quarterly lags. '
         r'The entity dimension is factor $\times$ country. Standard errors are clustered '
         r'at the entity level.'
     )
@@ -1230,13 +1243,21 @@ def append_latex_sections(results: dict):
 
     # Build table manually for multi-IV results
     P2 = results['P2']
-    iv_list = ['factor_io', 'factor_io_for']
-    iv_labels = {'factor_io': r'$\beta_{\text{IO}}$', 'factor_io_for': r'$\beta_{\text{Foreign IO}}$'}
+    iv_list = ['factor_io', 'factor_io_lag1', 'factor_io_lag2',
+               'factor_io_for', 'factor_io_for_lag1', 'factor_io_for_lag2']
+    iv_labels = {
+        'factor_io': r'$\beta_{\text{IO}_t}$',
+        'factor_io_lag1': r'$\beta_{\text{IO}_{t-1}}$',
+        'factor_io_lag2': r'$\beta_{\text{IO}_{t-2}}$',
+        'factor_io_for': r'$\beta_{\text{ForIO}_t}$',
+        'factor_io_for_lag1': r'$\beta_{\text{ForIO}_{t-1}}$',
+        'factor_io_for_lag2': r'$\beta_{\text{ForIO}_{t-2}}$',
+    }
     fe_keys = [('FE_entity', 'Entity FE'), ('FE_entity_time', 'Entity + Time FE')]
 
     sec2.append(r'\begin{table}[htbp]')
     sec2.append(r'\centering')
-    sec2.append(r'\caption{Factor-level IO and Foreign IO (levels) vs.\ global factor returns.}')
+    sec2.append(r'\caption{Factor-level IO and Foreign IO (levels, two lags) vs.\ global factor returns.}')
     sec2.append(r'\label{tab:reg_factor_global}')
     sec2.append(r'\footnotesize')
     sec2.append(r'\begin{tabular}{@{}l ccc ccc @{}}')
@@ -1279,7 +1300,7 @@ def append_latex_sections(results: dict):
         P1b = results['P1b']
         sec2.append(r'\begin{table}[htbp]')
         sec2.append(r'\centering')
-        sec2.append(r'\caption{Factor-level IO and Foreign IO (levels) vs.\ US factor returns.}')
+        sec2.append(r'\caption{Factor-level IO and Foreign IO (levels, two lags) vs.\ US factor returns.}')
         sec2.append(r'\label{tab:reg_factor_us_level}')
         sec2.append(r'\footnotesize')
         sec2.append(r'\begin{tabular}{@{}l ccc ccc @{}}')
