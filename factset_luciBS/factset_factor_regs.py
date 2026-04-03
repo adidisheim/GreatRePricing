@@ -42,7 +42,7 @@ def load_ferreira_us_io() -> pd.DataFrame:
     print("  Loading Ferreira ownership (US) ...")
     df = pd.read_parquet(
         PATH['RAW_DATA'] / 'ferreira_ownership.parquet',
-        columns=['factset_entity_id', 'quarter', 'rquarter', 'sec_country', 'io']
+        columns=['factset_entity_id', 'quarter', 'rquarter', 'sec_country', 'io', 'io_for']
     )
     df = df[df['sec_country'] == 'US'].copy()
     df['rquarter'] = pd.to_datetime(df['rquarter'])
@@ -53,8 +53,11 @@ def load_ferreira_us_io() -> pd.DataFrame:
     df['dio'] = df['io'] - df['io_lag']
     df = df.dropna(subset=['dio'])
 
+    # Foreign share of IO
+    df['io_for'] = df['io_for'].fillna(0)
+
     print(f"    {len(df):,} entity-quarter obs with dIO")
-    return df[['factset_entity_id', 'rquarter', 'io', 'dio']].copy()
+    return df[['factset_entity_id', 'rquarter', 'io', 'dio', 'io_for']].copy()
 
 
 def load_crosswalk() -> pd.DataFrame:
@@ -151,7 +154,7 @@ def build_factor_dio_panel(reload: bool = False) -> pd.DataFrame:
     all_rows = []
 
     # Pre-index io_data by rquarter for fast lookup
-    io_by_quarter = {rq: grp[['permno', 'dio', 'io']].copy()
+    io_by_quarter = {rq: grp[['permno', 'dio', 'io', 'io_for']].copy()
                      for rq, grp in io_data.groupby('rquarter')}
     sort_eom_list = sort_q_df[['sort_eom', 'rquarter']].values.tolist()
 
@@ -236,12 +239,17 @@ def build_factor_dio_panel(reload: bool = False) -> pd.DataFrame:
                                         weights=long_merged['me'])
                 vw_io_short = np.average(short_merged['io'],
                                          weights=short_merged['me'])
+                vw_io_for_long = np.average(long_merged['io_for'],
+                                            weights=long_merged['me'])
+                vw_io_for_short = np.average(short_merged['io_for'],
+                                             weights=short_merged['me'])
 
                 all_rows.append({
                     'factor': factor,
                     'quarter_date': rquarter,
                     'factor_dio': vw_dio_long - vw_dio_short,
                     'factor_io': vw_io_long - vw_io_short,
+                    'factor_io_for': vw_io_for_long - vw_io_for_short,
                     'n_long': len(long_merged),
                     'n_short': len(short_merged),
                 })
@@ -307,6 +315,8 @@ def build_all_countries_panel(us_panel: pd.DataFrame) -> pd.DataFrame:
     keep_cols = ['factor', 'quarter_date', 'factor_dio']
     if 'factor_io' in us_panel.columns:
         keep_cols.append('factor_io')
+    if 'factor_io_for' in us_panel.columns:
+        keep_cols.append('factor_io_for')
     us_dio = us_panel[keep_cols].copy()
 
     # Cross-join: for each country's factor returns, attach the US dIO
@@ -347,8 +357,9 @@ def aggregate_to_frequency(panel: pd.DataFrame, freq: str,
     pd.DataFrame with columns: [entity_col, 'date', 'factor_dio', 'factor_ret']
     """
     keep = [entity_col, 'quarter_date', 'factor_dio', 'factor_ret']
-    if 'factor_io' in panel.columns:
-        keep.append('factor_io')
+    for extra in ['factor_io', 'factor_io_for']:
+        if extra in panel.columns:
+            keep.append(extra)
     df = panel[keep].copy()
     df = df.dropna(subset=['factor_dio', 'factor_ret'])
 
@@ -367,7 +378,8 @@ def aggregate_to_frequency(panel: pd.DataFrame, freq: str,
             factor_ret=('factor_ret', 'sum'),
             factor_dio=('factor_dio', 'mean'),
             n_q=('factor_dio', 'count'),
-            **({'factor_io': ('factor_io', 'mean')} if 'factor_io' in df.columns else {})
+            **({'factor_io': ('factor_io', 'mean')} if 'factor_io' in df.columns else {}),
+            **({'factor_io_for': ('factor_io_for', 'mean')} if 'factor_io_for' in df.columns else {})
         ).reset_index()
         # Keep only complete semesters (2 quarters)
         agg = agg[agg['n_q'] == 2].drop(columns='n_q')
@@ -385,7 +397,8 @@ def aggregate_to_frequency(panel: pd.DataFrame, freq: str,
             factor_ret=('factor_ret', 'sum'),
             factor_dio=('factor_dio', 'mean'),
             n_q=('factor_dio', 'count'),
-            **({'factor_io': ('factor_io', 'mean')} if 'factor_io' in df.columns else {})
+            **({'factor_io': ('factor_io', 'mean')} if 'factor_io' in df.columns else {}),
+            **({'factor_io_for': ('factor_io_for', 'mean')} if 'factor_io_for' in df.columns else {})
         ).reset_index()
         # Keep only complete years (4 quarters)
         agg = agg[agg['n_q'] == 4].drop(columns='n_q')
@@ -402,30 +415,33 @@ def aggregate_to_frequency(panel: pd.DataFrame, freq: str,
 
 def run_panel_regression(panel_freq: pd.DataFrame, entity_col: str,
                          entity_fe: bool = True, time_fe: bool = False,
-                         iv_col: str = 'factor_dio') -> dict:
+                         iv_col: str = 'factor_dio',
+                         iv_cols: list = None) -> dict:
     """
-    Run PanelOLS: factor_ret ~ iv_col with specified FEs.
+    Run PanelOLS: factor_ret ~ iv_col(s) with specified FEs.
 
-    Parameters
-    ----------
-    panel_freq : pd.DataFrame
-        Must have [entity_col, 'date', iv_col, 'factor_ret'].
-    entity_col : str
-        Column to use as the entity index.
-    entity_fe, time_fe : bool
-        Fixed effects.
-    iv_col : str
-        Independent variable column name.
+    If iv_cols is provided (list), use multiple regressors and return
+    per-variable results. Otherwise use single iv_col.
 
     Returns
     -------
-    dict with keys: coef, tstat, pval, r2_within, nobs, n_entities
+    dict with keys per IV: coef, tstat, pval + r2_within, nobs, n_entities
     """
-    df = panel_freq[[entity_col, 'date', iv_col, 'factor_ret']].dropna().copy()
+    if iv_cols is None:
+        iv_cols = [iv_col]
+
+    df = panel_freq[[entity_col, 'date'] + iv_cols + ['factor_ret']].dropna().copy()
 
     if len(df) < 20:
-        return {'coef': np.nan, 'tstat': np.nan, 'pval': np.nan,
-                'r2_within': np.nan, 'nobs': len(df), 'n_entities': 0}
+        result = {iv: {'coef': np.nan, 'tstat': np.nan, 'pval': np.nan} for iv in iv_cols}
+        result['r2_within'] = np.nan
+        result['nobs'] = len(df)
+        result['n_entities'] = 0
+        if len(iv_cols) == 1:
+            # Backward compat: flat dict
+            return {'coef': np.nan, 'tstat': np.nan, 'pval': np.nan,
+                    'r2_within': np.nan, 'nobs': len(df), 'n_entities': 0}
+        return result
 
     df = df.set_index([entity_col, 'date'])
 
@@ -437,17 +453,24 @@ def run_panel_regression(panel_freq: pd.DataFrame, entity_col: str,
     elif time_fe:
         fe_kw = {'time_effects': True}
 
-    mod = PanelOLS(df['factor_ret'], df[[iv_col]], check_rank=False, **fe_kw)
+    mod = PanelOLS(df['factor_ret'], df[iv_cols], check_rank=False, **fe_kw)
     res = mod.fit(cov_type='clustered', cluster_entity=True)
 
-    return {
-        'coef': res.params[iv_col],
-        'tstat': res.tstats[iv_col],
-        'pval': res.pvalues[iv_col],
-        'r2_within': res.rsquared_within,
-        'nobs': res.nobs,
-        'n_entities': df.index.get_level_values(0).nunique(),
-    }
+    if len(iv_cols) == 1:
+        iv = iv_cols[0]
+        return {
+            'coef': res.params[iv], 'tstat': res.tstats[iv], 'pval': res.pvalues[iv],
+            'r2_within': res.rsquared_within, 'nobs': res.nobs,
+            'n_entities': df.index.get_level_values(0).nunique(),
+        }
+    else:
+        result = {}
+        for iv in iv_cols:
+            result[iv] = {'coef': res.params[iv], 'tstat': res.tstats[iv], 'pval': res.pvalues[iv]}
+        result['r2_within'] = res.rsquared_within
+        result['nobs'] = res.nobs
+        result['n_entities'] = df.index.get_level_values(0).nunique()
+        return result
 
 
 def run_all_regressions(us_panel: pd.DataFrame,
@@ -475,20 +498,22 @@ def run_all_regressions(us_panel: pd.DataFrame,
                   f"t={res['tstat']:+.2f}{stars} | R2w={res['r2_within']:.4f} | "
                   f"N={res['nobs']}")
 
-    # ── Point 2: All countries (IO level) ─────────────────────────────────
-    print("\n=== Point 2: All-countries regressions (IO level) ===")
+    # ── Point 2: All countries (IO level + foreign IO level) ────────────
+    print("\n=== Point 2: All-countries regressions (IO + foreign IO levels) ===")
     results['P2'] = {}
+    P2_IVS = ['factor_io', 'factor_io_for']
     for freq in ['Q', 'S', 'A']:
         results['P2'][freq] = {}
         panel_freq = aggregate_to_frequency(all_panel, freq, entity_col='entity_id')
         for fe_label, fe_kw in [('FE_entity', dict(entity_fe=True, time_fe=False)),
                                 ('FE_entity_time', dict(entity_fe=True, time_fe=True))]:
-            res = run_panel_regression(panel_freq, entity_col='entity_id', iv_col='factor_io', **fe_kw)
+            res = run_panel_regression(panel_freq, entity_col='entity_id', iv_cols=P2_IVS, **fe_kw)
             results['P2'][freq][fe_label] = res
-            stars = '***' if res['pval'] < 0.01 else '**' if res['pval'] < 0.05 else '*' if res['pval'] < 0.10 else ''
-            print(f"  {freq} | {fe_label:20s} | coef={res['coef']:+.4f} | "
-                  f"t={res['tstat']:+.2f}{stars} | R2w={res['r2_within']:.4f} | "
-                  f"N={res['nobs']} | entities={res['n_entities']}")
+            print(f"  {freq} | {fe_label:20s} | R2w={res['r2_within']:.4f} | N={res['nobs']}")
+            for iv in P2_IVS:
+                c, t, p = res[iv]['coef'], res[iv]['tstat'], res[iv]['pval']
+                s = '***' if p < 0.01 else '**' if p < 0.05 else '*' if p < 0.1 else ''
+                print(f"    {iv}: {c:+.4f}{s} (t={t:+.2f})")
 
     return results
 
@@ -1178,22 +1203,59 @@ def append_latex_sections(results: dict):
     sec2.append(r'\section{Factor-Level IO and Global Factor Returns}')
     sec2.append('')
     sec2.append(
-        r'We extend the analysis to all countries in the JKP dataset. The regressor '
-        r'is the US-computed factor IO level (VW IO of long leg minus VW IO of short leg), '
-        r'as US institutions represent the dominant source of cross-border flows. '
+        r'We extend the analysis to all countries in the JKP dataset. Two regressors are included: '
+        r'the US-computed factor IO level (VW IO of long leg minus VW IO of short leg) and the '
+        r'factor foreign IO level (same construction using only foreign institutional ownership). '
         r'The entity dimension is factor $\times$ country. Standard errors are clustered '
         r'at the entity level.'
     )
     sec2.append('')
 
-    table2 = _build_factor_table(
-        results['P2'],
-        fe_keys=('FE_entity', 'FE_entity_time'),
-        beta_label=r'$\beta_{\text{IO}}$',
-        caption=r'Factor-level IO (level) and global factor returns (panel regression).',
-        label='reg_factor_global',
-    )
-    sec2.append(table2)
+    # Build table manually for multi-IV results
+    P2 = results['P2']
+    iv_list = ['factor_io', 'factor_io_for']
+    iv_labels = {'factor_io': r'$\beta_{\text{IO}}$', 'factor_io_for': r'$\beta_{\text{Foreign IO}}$'}
+    fe_keys = [('FE_entity', 'Entity FE'), ('FE_entity_time', 'Entity + Time FE')]
+
+    sec2.append(r'\begin{table}[htbp]')
+    sec2.append(r'\centering')
+    sec2.append(r'\caption{Factor-level IO and Foreign IO (levels) vs.\ global factor returns.}')
+    sec2.append(r'\label{tab:reg_factor_global}')
+    sec2.append(r'\footnotesize')
+    sec2.append(r'\begin{tabular}{@{}l ccc ccc @{}}')
+    sec2.append(r'\toprule')
+    sec2.append(r' & \multicolumn{3}{c}{Entity FE} & \multicolumn{3}{c}{Entity + Time FE} \\')
+    sec2.append(r'\cmidrule(lr){2-4} \cmidrule(lr){5-7}')
+    sec2.append(r' & Q & S & A & Q & S & A \\')
+    sec2.append(r'\midrule')
+
+    for iv in iv_list:
+        coefs_r, tstats_r = [], []
+        for freq in ['Q', 'S', 'A']:
+            for fe_key, _ in fe_keys:
+                r = P2[freq][fe_key]
+                c = r[iv]['coef']; t = r[iv]['tstat']; p = r[iv]['pval']
+                if np.isnan(c):
+                    coefs_r.append('---'); tstats_r.append('')
+                else:
+                    stars = '^{***}' if p < 0.01 else '^{**}' if p < 0.05 else '^{*}' if p < 0.1 else ''
+                    sign = '$-$' if c < 0 else ''
+                    coefs_r.append(f'{sign}{abs(c):.4f}${stars}$')
+                    tstats_r.append(f'({t:.2f})')
+        sec2.append(f'{iv_labels[iv]} & {" & ".join(coefs_r)} \\\\')
+        sec2.append(f' & {" & ".join(tstats_r)} \\\\[2pt]')
+
+    r2_r, n_r = [], []
+    for freq in ['Q', 'S', 'A']:
+        for fe_key, _ in fe_keys:
+            r = P2[freq][fe_key]
+            r2_r.append(f'{r["r2_within"]:.4f}')
+            n_r.append(f'{r["nobs"]:,}')
+    sec2.append(f'$R^2_w$ & {" & ".join(r2_r)} \\\\')
+    sec2.append(f'$N$ & {" & ".join(n_r)} \\\\')
+    sec2.append(r'\bottomrule')
+    sec2.append(r'\end{tabular}')
+    sec2.append(r'\end{table}')
 
     # ── Section 3: Stock-Level IO and US Optimal Portfolio Contributions ──
     sec3 = []
