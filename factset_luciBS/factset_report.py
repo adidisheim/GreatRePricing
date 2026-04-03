@@ -426,25 +426,40 @@ print(f"  {len(panel_base)} rows, {n_countries} countries")
 reg_base = run_regs(panel_base, ms_pb, sr_pb, ['foreign_share'])
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 6: Panel + US FS on country X
+# STEP 6: Panel + US penetration on country X
+# US_penetration_X = US IO $ in country X / domestic IO $ in country X
 # ══════════════════════════════════════════════════════════════════════════════
-print("Step 6: Panel + US FS controls...")
+print("Step 6: Panel + US penetration controls...")
+
+# Precompute domestic IO $ in local market for each country-quarter
+dom_home_usd = {}
+for c in COUNTRIES:
+    if c == 'US': continue
+    h, f = get_aggs(c)
+    ifc = f'io_from_{c}'
+    if f'w_{ifc}' in h.columns:
+        s = h[f'w_{ifc}']
+        s.index = pd.to_datetime(s.index)
+        dom_home_usd[c] = s
+
 reg_us = {}
 for cat in ['all'] + TYPE_NAMES:
     sub = us_type_by_country[us_type_by_country['cat_name'] == cat]
-    us_total = us_type_agg[(us_type_agg['cat_name'] == cat)].set_index('quarter')
-    us_total_usd = us_total['io_usd_us'] + us_total['io_usd_foreign']
 
     panel_rows = []
     for c in COUNTRIES:
-        if c == 'US' or c not in fs_country: continue
+        if c == 'US' or c not in fs_country or c not in dom_home_usd: continue
         iso3 = iso2_to_3[c]
+        # US IO $ invested in country X for this IO type
         us_on_x = sub[sub['sec_country'] == c].set_index('quarter')['io_usd']
-        share_x = us_on_x / us_total_usd.replace(0, np.nan)
-        share_x = share_x.replace([np.inf, -np.inf], np.nan)
-        share_x.index = share_x.index.map(int_to_dt)
+        us_on_x.index = us_on_x.index.map(int_to_dt)
+        # Domestic IO $ in country X's own market
+        dom_x = dom_home_usd[c]
+        # US penetration = US $ on X / domestic $ on X
+        penetration = us_on_x / dom_x.replace(0, np.nan)
+        penetration = penetration.replace([np.inf, -np.inf], np.nan)
 
-        tmp = pd.DataFrame({'foreign_share': fs_country[c], 'us_share_x': share_x})
+        tmp = pd.DataFrame({'foreign_share': fs_country[c], 'us_share_x': penetration})
         tmp.index.name = 'date'
         tmp['iso3'] = iso3
         tmp = tmp.reset_index()
@@ -495,8 +510,9 @@ L.append(r'\]')
 L.append(
     r'A higher $\text{FS}$ means US institutions hold a larger share of their total portfolio in '
     r'foreign stocks. For the panel regressions, the country-specific US variable '
-    r'$\text{FS}^{\text{US}}_i$ is the share of total US institutional holdings allocated to '
-    r'country $i$\textquotesingle s stocks.'
+    r'$\text{UP}_i$ (US penetration) is the ratio of US institutional dollars invested in '
+    r'country $i$\textquotesingle s stocks to the domestic institutional dollars invested in '
+    r'country $i$\textquotesingle s own market.'
 )
 L.append('')
 L.append(
@@ -656,8 +672,9 @@ L.append(
 L.append('')
 L.append(
     r'Tables~\ref{tab:reg_us_all}--\ref{tab:reg_us_pension} augment the baseline with a '
-    r'US-specific control: $\text{FS}^{\text{US}}_i$, the share of total US institutional '
-    r'holdings allocated to country $i$\textquotesingle s stocks. We report separate regressions '
+    r'US-specific control: $\text{UP}_i$ (US penetration), the ratio of US institutional '
+    r'dollars invested in country $i$ to the domestic institutional dollars invested in '
+    r'country $i$\textquotesingle s own market. We report separate regressions '
     r'for each US institution type.'
 )
 L.append('')
@@ -708,11 +725,11 @@ write_reg_table(
 for cat in ['all'] + TYPE_NAMES:
     if cat not in reg_us: continue
     write_reg_table(
-        f'Adding US FS on country $i$ ({TYPE_LABELS.get(cat,cat)}). '
-        f'US FS$_i$ = US \\$ on country $i$ / total US \\$.',
+        f'Adding US penetration on country $i$ ({TYPE_LABELS.get(cat,cat)}). '
+        f'UP$_i$ = US \\$ on country $i$ / domestic \\$ on country $i$.',
         f'tab:reg_us_{cat}', reg_us[cat],
         ['foreign_share', 'us_share_x'],
-        [r'\beta_{\text{FS dom}}', r'\beta_{\text{FS}^{\text{US}}_i}'])
+        [r'\beta_{\text{FS dom}}', r'\beta_{\text{UP}_i}'])
 
 L.append(r'\end{document}')
 
