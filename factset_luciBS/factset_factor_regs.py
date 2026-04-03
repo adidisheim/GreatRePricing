@@ -151,7 +151,7 @@ def build_factor_dio_panel(reload: bool = False) -> pd.DataFrame:
     all_rows = []
 
     # Pre-index io_data by rquarter for fast lookup
-    io_by_quarter = {rq: grp[['permno', 'dio']].copy()
+    io_by_quarter = {rq: grp[['permno', 'dio', 'io']].copy()
                      for rq, grp in io_data.groupby('rquarter')}
     sort_eom_list = sort_q_df[['sort_eom', 'rquarter']].values.tolist()
 
@@ -232,11 +232,16 @@ def build_factor_dio_panel(reload: bool = False) -> pd.DataFrame:
                                          weights=long_merged['me'])
                 vw_dio_short = np.average(short_merged['dio'],
                                           weights=short_merged['me'])
+                vw_io_long = np.average(long_merged['io'],
+                                        weights=long_merged['me'])
+                vw_io_short = np.average(short_merged['io'],
+                                         weights=short_merged['me'])
 
                 all_rows.append({
                     'factor': factor,
                     'quarter_date': rquarter,
                     'factor_dio': vw_dio_long - vw_dio_short,
+                    'factor_io': vw_io_long - vw_io_short,
                     'n_long': len(long_merged),
                     'n_short': len(short_merged),
                 })
@@ -298,8 +303,11 @@ def build_all_countries_panel(us_panel: pd.DataFrame) -> pd.DataFrame:
             .sum().reset_index().rename(columns={'name': 'factor',
                                                  'ret_signed': 'factor_ret'}))
 
-    # US dIO keyed by (factor, quarter_date)
-    us_dio = us_panel[['factor', 'quarter_date', 'factor_dio']].copy()
+    # US dIO and IO level keyed by (factor, quarter_date)
+    keep_cols = ['factor', 'quarter_date', 'factor_dio']
+    if 'factor_io' in us_panel.columns:
+        keep_cols.append('factor_io')
+    us_dio = us_panel[keep_cols].copy()
 
     # Cross-join: for each country's factor returns, attach the US dIO
     panel = fr_q.merge(us_dio, on=['factor', 'quarter_date'], how='inner')
@@ -338,7 +346,10 @@ def aggregate_to_frequency(panel: pd.DataFrame, freq: str,
     -------
     pd.DataFrame with columns: [entity_col, 'date', 'factor_dio', 'factor_ret']
     """
-    df = panel[[entity_col, 'quarter_date', 'factor_dio', 'factor_ret']].copy()
+    keep = [entity_col, 'quarter_date', 'factor_dio', 'factor_ret']
+    if 'factor_io' in panel.columns:
+        keep.append('factor_io')
+    df = panel[keep].copy()
     df = df.dropna(subset=['factor_dio', 'factor_ret'])
 
     if freq == 'Q':
@@ -351,10 +362,12 @@ def aggregate_to_frequency(panel: pd.DataFrame, freq: str,
         # H1 = Q1+Q2 (months 3,6), H2 = Q3+Q4 (months 9,12)
         df['half'] = np.where(df['quarter_date'].dt.month <= 6, 1, 2)
         grp = df.groupby([entity_col, 'year', 'half'])
+        agg_d = {'factor_ret': 'sum', 'factor_dio': 'mean', 'n_q': ('factor_dio', 'count')}
         agg = grp.agg(
             factor_ret=('factor_ret', 'sum'),
             factor_dio=('factor_dio', 'mean'),
-            n_q=('factor_dio', 'count')
+            n_q=('factor_dio', 'count'),
+            **({'factor_io': ('factor_io', 'mean')} if 'factor_io' in df.columns else {})
         ).reset_index()
         # Keep only complete semesters (2 quarters)
         agg = agg[agg['n_q'] == 2].drop(columns='n_q')
@@ -371,7 +384,8 @@ def aggregate_to_frequency(panel: pd.DataFrame, freq: str,
         agg = grp.agg(
             factor_ret=('factor_ret', 'sum'),
             factor_dio=('factor_dio', 'mean'),
-            n_q=('factor_dio', 'count')
+            n_q=('factor_dio', 'count'),
+            **({'factor_io': ('factor_io', 'mean')} if 'factor_io' in df.columns else {})
         ).reset_index()
         # Keep only complete years (4 quarters)
         agg = agg[agg['n_q'] == 4].drop(columns='n_q')
@@ -387,33 +401,32 @@ def aggregate_to_frequency(panel: pd.DataFrame, freq: str,
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_panel_regression(panel_freq: pd.DataFrame, entity_col: str,
-                         entity_fe: bool = True, time_fe: bool = False
-                         ) -> dict:
+                         entity_fe: bool = True, time_fe: bool = False,
+                         iv_col: str = 'factor_dio') -> dict:
     """
-    Run PanelOLS: factor_ret ~ factor_dio with specified FEs.
+    Run PanelOLS: factor_ret ~ iv_col with specified FEs.
 
     Parameters
     ----------
     panel_freq : pd.DataFrame
-        Must have [entity_col, 'date', 'factor_dio', 'factor_ret'].
+        Must have [entity_col, 'date', iv_col, 'factor_ret'].
     entity_col : str
         Column to use as the entity index.
-    entity_fe : bool
-        Include entity fixed effects.
-    time_fe : bool
-        Include time fixed effects.
+    entity_fe, time_fe : bool
+        Fixed effects.
+    iv_col : str
+        Independent variable column name.
 
     Returns
     -------
-    dict with keys: coef, tstat, pval, r2_within, r2_between, nobs, n_entities
+    dict with keys: coef, tstat, pval, r2_within, nobs, n_entities
     """
-    df = panel_freq[[entity_col, 'date', 'factor_dio', 'factor_ret']].dropna().copy()
+    df = panel_freq[[entity_col, 'date', iv_col, 'factor_ret']].dropna().copy()
 
     if len(df) < 20:
         return {'coef': np.nan, 'tstat': np.nan, 'pval': np.nan,
                 'r2_within': np.nan, 'nobs': len(df), 'n_entities': 0}
 
-    # Set panel index
     df = df.set_index([entity_col, 'date'])
 
     fe_kw = {}
@@ -424,13 +437,13 @@ def run_panel_regression(panel_freq: pd.DataFrame, entity_col: str,
     elif time_fe:
         fe_kw = {'time_effects': True}
 
-    mod = PanelOLS(df['factor_ret'], df[['factor_dio']], check_rank=False, **fe_kw)
+    mod = PanelOLS(df['factor_ret'], df[[iv_col]], check_rank=False, **fe_kw)
     res = mod.fit(cov_type='clustered', cluster_entity=True)
 
     return {
-        'coef': res.params['factor_dio'],
-        'tstat': res.tstats['factor_dio'],
-        'pval': res.pvalues['factor_dio'],
+        'coef': res.params[iv_col],
+        'tstat': res.tstats[iv_col],
+        'pval': res.pvalues[iv_col],
         'r2_within': res.rsquared_within,
         'nobs': res.nobs,
         'n_entities': df.index.get_level_values(0).nunique(),
@@ -462,15 +475,15 @@ def run_all_regressions(us_panel: pd.DataFrame,
                   f"t={res['tstat']:+.2f}{stars} | R2w={res['r2_within']:.4f} | "
                   f"N={res['nobs']}")
 
-    # ── Point 2: All countries ────────────────────────────────────────────
-    print("\n=== Point 2: All-countries regressions ===")
+    # ── Point 2: All countries (IO level) ─────────────────────────────────
+    print("\n=== Point 2: All-countries regressions (IO level) ===")
     results['P2'] = {}
     for freq in ['Q', 'S', 'A']:
         results['P2'][freq] = {}
         panel_freq = aggregate_to_frequency(all_panel, freq, entity_col='entity_id')
         for fe_label, fe_kw in [('FE_entity', dict(entity_fe=True, time_fe=False)),
                                 ('FE_entity_time', dict(entity_fe=True, time_fe=True))]:
-            res = run_panel_regression(panel_freq, entity_col='entity_id', **fe_kw)
+            res = run_panel_regression(panel_freq, entity_col='entity_id', iv_col='factor_io', **fe_kw)
             results['P2'][freq][fe_label] = res
             stars = '***' if res['pval'] < 0.01 else '**' if res['pval'] < 0.05 else '*' if res['pval'] < 0.10 else ''
             print(f"  {freq} | {fe_label:20s} | coef={res['coef']:+.4f} | "
@@ -1192,17 +1205,18 @@ def append_latex_sections(results: dict):
     sec2.append('')
     sec2.append(
         r'We extend the analysis to all countries in the JKP dataset. The regressor '
-        r'remains the US-computed factor $\Delta\text{IO}$, as US institutions represent '
-        r'the dominant source of cross-border flows. The entity dimension is factor '
-        r'$\times$ country. Standard errors are clustered at the entity level.'
+        r'is the US-computed factor IO level (VW IO of long leg minus VW IO of short leg), '
+        r'as US institutions represent the dominant source of cross-border flows. '
+        r'The entity dimension is factor $\times$ country. Standard errors are clustered '
+        r'at the entity level.'
     )
     sec2.append('')
 
     table2 = _build_factor_table(
         results['P2'],
         fe_keys=('FE_entity', 'FE_entity_time'),
-        beta_label=r'$\beta_{\Delta\text{IO}}$',
-        caption=r'Factor-level $\Delta$IO and global factor returns (panel regression).',
+        beta_label=r'$\beta_{\text{IO}}$',
+        caption=r'Factor-level IO (level) and global factor returns (panel regression).',
         label='reg_factor_global',
     )
     sec2.append(table2)
