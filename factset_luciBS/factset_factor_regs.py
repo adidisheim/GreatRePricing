@@ -1169,33 +1169,7 @@ def append_latex_sections(results: dict):
     # Strip \end{document}
     tex_content = tex_content.replace(r'\end{document}', '').rstrip()
 
-    # ── Section 1: Factor-Level IO and US Factor Returns ──────────────────
-    sec1 = []
-    sec1.append('')
-    sec1.append(r'\clearpage')
-    sec1.append(r'\section{Factor-Level IO and US Factor Returns}')
-    sec1.append('')
-    sec1.append(
-        r'For each JKP factor, we sort US stocks into terciles on the underlying '
-        r'characteristic. The long (short) leg contains stocks in the top (bottom) '
-        r'tercile, respecting the factor\textquotesingle s sign convention. We compute '
-        r'the value-weighted change in institutional ownership ($\Delta\text{IO}$) for '
-        r'each leg using market equity weights and Ferreira--Matos IO data. The '
-        r'factor-level $\Delta\text{IO}$ is '
-        r'$\text{VW}\_\Delta\text{IO}_{\text{long}} - \text{VW}\_\Delta\text{IO}_{\text{short}}$. '
-        r'We regress factor returns on factor $\Delta\text{IO}$ in a panel with factor '
-        r'fixed effects.'
-    )
-    sec1.append('')
-
-    table1 = _build_factor_table(
-        results['P1'],
-        fe_keys=('FE_entity', 'FE_entity_time'),
-        beta_label=r'$\beta_{\Delta\text{IO}}$',
-        caption=r'Factor-level $\Delta$IO and US factor returns (panel regression).',
-        label='reg_factor_us',
-    )
-    sec1.append(table1)
+    sec1 = []  # Section 1 (US factor-level) removed
 
     # ── Section 2: Factor-Level IO and Global Factor Returns ──────────────
     sec2 = []
